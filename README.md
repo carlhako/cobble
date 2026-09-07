@@ -24,7 +24,7 @@ milestones that build on what is here.
 | Timezone | **Set explicitly** (`timedatectl set-timezone …`) | An unset zone places later scheduled work (M2's 04:00 update) at an unexpected hour. |
 | Networking | UDP **19132** (IPv4) and **19133** (IPv6) reachable on the LAN | BDS listens on these. Bridged networking needs no port forwarding for LAN-only use. |
 | Backup mount | `/backup` as a bind mount from the Proxmox host (optional, M2) | Cobble treats it as a plain path; NFS/CIFS mounting is a host concern. |
-| Build tools | **None** | The release tarball ships a pre-built frontend. The install script needs only `python3`, `curl`, `unzip`. |
+| Build tools | **None** | The release ships a pre-built wheel (frontend bundle included). The install script needs `python3`, `python3-venv`, `curl`, `unzip` and installs every dependency as a pre-built wheel — no compiler. |
 
 ## Install
 
@@ -45,7 +45,7 @@ Open `http://<container-ip>:8000/` in a browser on the LAN.
 ## Filesystem layout
 
 ```
-/opt/cobble/              application (Python + static/)
+/opt/cobble/venv/         virtualenv with cobble + deps installed (bundle included)
 /srv/bedrock/
     versions/<version>/   extracted BDS, one directory per version
     current -> versions/… symlink naming the active version

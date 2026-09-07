@@ -73,23 +73,26 @@ else
   tar -xzf "$work/cobble.tar.gz" -C "$work"
 fi
 src="$work/cobble"
-[ -f "$src/pyproject.toml" ] || die "release tarball layout unexpected"
-[ -f "$src/src/cobble/static/index.html" ] || die "release tarball has no pre-built web interface"
+wheel="$(ls "$src"/dist/cobble-*-py3-none-any.whl 2>/dev/null | head -n1 || true)"
+[ -n "$wheel" ] || die "release tarball has no cobble wheel"
 
 # --- install application -----------------------------------
 log "installing application to $PREFIX"
 mkdir -p "$PREFIX"
-rm -rf "$PREFIX/src" "$PREFIX/pyproject.toml"
-cp -a "$src/src" "$src/pyproject.toml" "$src/README.md" "$PREFIX/"
+cp -a "$src/README.md" "$PREFIX/"
 
-log "creating virtualenv and installing dependencies from the bundled wheelhouse"
+log "creating virtualenv and installing cobble"
 python3 -m venv "$PREFIX/venv"
 "$PREFIX/venv/bin/pip" install --quiet --upgrade pip
-if [ -d "$src/wheelhouse" ]; then
-  "$PREFIX/venv/bin/pip" install --quiet --no-index --find-links "$src/wheelhouse" "$PREFIX"
+# Install the bundled wheel BY PATH (never by bare name — an unrelated project
+# named "cobble" exists on PyPI). --only-binary=:all: is the "no compiler on the
+# host" guarantee: every dependency is installed as a pre-built wheel or the
+# install fails loudly. Set COBBLE_WHEELHOUSE=/path for a fully offline install.
+if [ -n "${COBBLE_WHEELHOUSE:-}" ]; then
+  "$PREFIX/venv/bin/pip" install --quiet --only-binary=:all: --no-index \
+    --find-links "$COBBLE_WHEELHOUSE" "$wheel"
 else
-  warn "no bundled wheelhouse; falling back to PyPI (needs network, still no compiler)"
-  "$PREFIX/venv/bin/pip" install --quiet --prefer-binary "$PREFIX"
+  "$PREFIX/venv/bin/pip" install --quiet --only-binary=:all: "$wheel"
 fi
 
 # --- directory layout (design.md D5) --------------------
