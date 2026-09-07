@@ -75,4 +75,9 @@ export interface StatusPayload {
   last_shutdown: { clean: boolean; at: string } | null;
   bootstrap: BootstrapState;
   bootstrap_detail: string;
+  last_crash: {
+    exit_code: number | null;
+    at: string;
+    recovery: "none" | "restarting" | "running" | "abandoned" | "stopped";
+  } | null;
 }

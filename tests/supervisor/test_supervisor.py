@@ -203,3 +203,21 @@ async def test_restore_restarts_previously_running_server(
 async def _wait_state(sup: Supervisor, target: RunState) -> None:
     async with asyncio.timeout(15):
         await sup.wait_for_state(target)
+
+
+async def test_last_crash_is_recorded_with_exit_code(make_supervisor) -> None:
+    # 10.4 observability: after a crash the supervisor exposes a crash record
+    # (exit code + timestamp) so status can show it even after auto-restart.
+    sup: Supervisor = make_supervisor(crash_restart_threshold=0)
+    import os
+
+    os.environ["FAKE_BDS_CRASH_AFTER"] = "0.3"
+    try:
+        await sup.start()
+        await _wait_state(sup, RunState.CRASHED)
+    finally:
+        os.environ.pop("FAKE_BDS_CRASH_AFTER", None)
+    assert sup.last_crash is not None
+    assert sup.last_crash.exit_code == 3
+    assert "T" in sup.last_crash.at  # ISO timestamp
+    await sup.stop()

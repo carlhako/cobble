@@ -53,6 +53,13 @@ class ShutdownView:
 
 
 @dataclass(frozen=True)
+class CrashView:
+    exit_code: int | None
+    at: str
+    recovery: str  # restarting | running | abandoned | crashed
+
+
+@dataclass(frozen=True)
 class StatusSnapshot:
     run_state: RunState
     version: str | None
@@ -62,6 +69,7 @@ class StatusSnapshot:
     last_shutdown: ShutdownView | None
     bootstrap: str = "skipped"
     bootstrap_detail: str = ""
+    last_crash: CrashView | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -79,6 +87,15 @@ class StatusSnapshot:
             ),
             "bootstrap": self.bootstrap,
             "bootstrap_detail": self.bootstrap_detail,
+            "last_crash": (
+                None
+                if self.last_crash is None
+                else {
+                    "exit_code": self.last_crash.exit_code,
+                    "at": self.last_crash.at,
+                    "recovery": self.last_crash.recovery,
+                }
+            ),
         }
 
 
@@ -139,6 +156,18 @@ class StatusTracker:
     # -- snapshot / push ------------------------------------
     def snapshot(self) -> StatusSnapshot:
         rec = self._sup.last_shutdown
+        crash = self._sup.last_crash
+        state = self._sup.state
+        if crash is None:
+            recovery = "none"
+        elif state == RunState.RUNNING:
+            recovery = "running"
+        elif state == RunState.RECOVERY_ABANDONED:
+            recovery = "abandoned"
+        elif state in (RunState.CRASHED, RunState.STARTING):
+            recovery = "restarting"
+        else:
+            recovery = "stopped"
         return StatusSnapshot(
             run_state=self._sup.state,
             version=self._sup.installed_version(),
@@ -150,6 +179,11 @@ class StatusTracker:
             last_shutdown=None if rec is None else ShutdownView(clean=rec.clean, at=rec.at),
             bootstrap=getattr(self._bootstrap, "state", "skipped"),
             bootstrap_detail=getattr(self._bootstrap, "detail", ""),
+            last_crash=(
+                None
+                if crash is None
+                else CrashView(exit_code=crash.exit_code, at=crash.at, recovery=recovery)
+            ),
         )
 
     def _emit(self) -> None:

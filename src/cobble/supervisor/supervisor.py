@@ -17,6 +17,7 @@ import contextlib
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from cobble.acquisition.layout import Layout
 from cobble.console.buffer import ConsoleBuffer
@@ -80,6 +81,12 @@ class ExitInfo:
     crashed: bool
 
 
+@dataclass
+class CrashInfo:
+    exit_code: int | None
+    at: str  # ISO 8601 UTC of the unexpected exit
+
+
 class Supervisor:
     def __init__(
         self,
@@ -106,6 +113,7 @@ class Supervisor:
 
         self._ready_at: float | None = None
         self._last_exit: ExitInfo | None = None
+        self._last_crash: CrashInfo | None = None
         self._crash_times: list[float] = []
 
         self.console = ConsoleBuffer(settings.console_buffer_lines)
@@ -155,6 +163,10 @@ class Supervisor:
     @property
     def last_exit(self) -> ExitInfo | None:
         return self._last_exit
+
+    @property
+    def last_crash(self) -> CrashInfo | None:
+        return self._last_crash
 
     def installed_version(self) -> str | None:
         return self._layout.installed_version()
@@ -255,7 +267,9 @@ class Supervisor:
         if requested:
             return  # stop() owns the transition to STOPPED and the record
 
-        # Unexpected exit → crash.
+        # Unexpected exit → crash. The recovery outcome is derived from the run
+        # state that follows, so a single record here is enough.
+        self._last_crash = CrashInfo(exit_code=code, at=datetime.now(UTC).isoformat())
         with contextlib.suppress(TransitionError):
             self._sm.transition(RunState.CRASHED)
         self.console.add_marker(f"— bedrock_server exited unexpectedly (code {code}) —")

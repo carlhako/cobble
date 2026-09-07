@@ -149,6 +149,26 @@ export function Dashboard() {
         )}
       </div>
 
+      {status?.last_crash && (
+        <div className="panel">
+          <h2>Last crash</h2>
+          <p className={status.last_crash.recovery === "abandoned" ? "warn" : "ok"}>
+            {status.last_crash.recovery === "running" && "Auto-restarted and running"}
+            {status.last_crash.recovery === "restarting" && "Crashed — restarting…"}
+            {status.last_crash.recovery === "abandoned" &&
+              "Recovery abandoned after repeated crashes"}
+            {(status.last_crash.recovery === "stopped" ||
+              status.last_crash.recovery === "none") &&
+              "Crashed"}
+            <span className="muted">
+              {" "}
+              · exit code {status.last_crash.exit_code ?? "?"} ·{" "}
+              {new Date(status.last_crash.at).toLocaleString()}
+            </span>
+          </p>
+        </div>
+      )}
+
       <div className="panel">
         <h2>Last shutdown</h2>
         {status?.last_shutdown ? (
