@@ -77,8 +77,8 @@
 
 ## 10. End-to-end verification
 
-- [ ] 10.1 Verify a full first-run flow on a clean LXC: install, bootstrap, start, join from a Bedrock client on the LAN, and observe the join in the online players list and console
-- [ ] 10.2 Verify a clean stop of a world with real content completes without forcible termination and is recorded as clean, then restarts with the world intact
-- [ ] 10.3 Verify host reboot brings cobble and the Bedrock server back automatically with no operator action
-- [ ] 10.4 Verify crash handling by terminating the Bedrock process directly: state becomes crashed, automatic restart occurs, and repeated crashes abandon recovery with the failure visible
-- [ ] 10.5 Verify cobble service restart leaves a dangling player session and that the resulting state is reported without error, confirming the reconciliation contract later player history work depends on
+- [x] 10.1 Verify a full first-run flow on a clean LXC: install, bootstrap, start, join from a Bedrock client on the LAN, and observe the join in the online players list and console
+- [x] 10.2 Verify a clean stop of a world with real content completes without forcible termination and is recorded as clean, then restarts with the world intact
+- [x] 10.3 Verify host reboot brings cobble and the Bedrock server back automatically with no operator action
+- [x] 10.4 Verify crash handling by terminating the Bedrock process directly: state becomes crashed, automatic restart occurs, and repeated crashes abandon recovery with the failure visible
+- [x] 10.5 Verify cobble service restart leaves a dangling player session and that the resulting state is reported without error, confirming the reconciliation contract later player history work depends on
