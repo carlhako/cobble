@@ -1,0 +1,335 @@
+/* cobble — control-panel visual design.
+   A restrained slate ground with a single green "live" accent and amber for
+   warnings. System UI for chrome, monospace for machine output. Legible at
+   desktop and tablet widths (single-column below 720px). */
+
+:root {
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #eceef1;
+  --border: #d5d9df;
+  --text: #1c2530;
+  --text-dim: #5c6673;
+  --accent: #1f9d55; /* running / ok */
+  --accent-weak: #e3f3ea;
+  --warn: #b45309; /* unclean / crashed */
+  --warn-weak: #fbeee0;
+  --danger: #b3261e;
+  --radius: 10px;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12151a;
+    --surface: #1b1f26;
+    --surface-2: #232833;
+    --border: #333a45;
+    --text: #e7ebf0;
+    --text-dim: #97a1b0;
+    --accent: #3fce7f;
+    --accent-weak: #17311f;
+    --warn: #e0a458;
+    --warn-weak: #362a1a;
+    --danger: #f2645a;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
+  line-height: 1.5;
+}
+h1 {
+  font-size: 1.35rem;
+  margin: 0 0 1rem;
+}
+h2 {
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin: 0 0 0.6rem;
+}
+
+/* -- shell -- */
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0.7rem 1.25rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+.brand {
+  font-family: var(--mono);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.brand::before {
+  content: "▪ ";
+  color: var(--accent);
+}
+.app-nav {
+  display: flex;
+  gap: 0.35rem;
+}
+.app-nav a {
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  text-decoration: none;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+.app-nav a:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.app-nav a.active {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+.app-main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 3rem;
+}
+
+.connection-banner {
+  background: var(--warn);
+  color: #fff;
+  padding: 0.5rem 1.25rem;
+  font-size: 0.88rem;
+  text-align: center;
+}
+
+/* -- dashboard -- */
+.is-stale {
+  opacity: 0.55;
+  transition: opacity 0.2s;
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.85rem 1rem;
+}
+.card-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.card-value {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin-top: 0.25rem;
+  font-variant-numeric: tabular-nums;
+}
+.card-value.state-running {
+  color: var(--accent);
+}
+.card-value.state-crashed,
+.card-value.state-failed,
+.card-value.state-recovery_abandoned {
+  color: var(--warn);
+}
+
+.badge {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: var(--warn-weak);
+  color: var(--warn);
+  vertical-align: middle;
+}
+.badge-warn {
+  background: var(--warn-weak);
+  color: var(--warn);
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.1rem;
+  margin-top: 1rem;
+}
+.player-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.3rem;
+}
+.player-list li {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.xuid {
+  color: var(--text-dim);
+}
+.ok {
+  color: var(--accent);
+}
+.warn {
+  color: var(--warn);
+}
+.muted {
+  color: var(--text-dim);
+}
+
+/* -- controls -- */
+.controls {
+  margin: 1rem 0;
+}
+.controls-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.btn {
+  font: inherit;
+  font-weight: 600;
+  padding: 0.45rem 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) {
+  border-color: var(--text-dim);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn-start {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn-restart {
+  background: var(--surface);
+}
+.controls-status {
+  font-size: 0.88rem;
+  color: var(--text-dim);
+}
+.controls-error {
+  margin-top: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  background: var(--warn-weak);
+  color: var(--warn);
+  font-size: 0.88rem;
+}
+.link {
+  background: none;
+  border: none;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  margin-left: 0.5rem;
+  font: inherit;
+}
+
+/* -- console -- */
+.console-log {
+  height: 60vh;
+  min-height: 280px;
+  overflow-y: auto;
+  background: #0c0f14;
+  color: #cdd6e4;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 0.9rem;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.cl-command {
+  color: #7fd1ff;
+}
+.cl-marker {
+  color: var(--warn);
+  font-style: italic;
+}
+.console-input {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+.console-input input {
+  flex: 1;
+  font: inherit;
+  font-family: var(--mono);
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+.console-input input:disabled {
+  opacity: 0.6;
+}
+.console-input button {
+  font: inherit;
+  font-weight: 600;
+  padding: 0.5rem 1.1rem;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+.console-input button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* -- responsive: tablet and below -- */
+@media (max-width: 720px) {
+  .cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .app-header {
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+  .app-main {
+    padding: 1rem;
+  }
+  .console-log {
+    height: 50vh;
+  }
+}

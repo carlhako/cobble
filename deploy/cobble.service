@@ -1,0 +1,47 @@
+[Unit]
+Description=cobble — Minecraft Bedrock server control panel
+Documentation=https://github.com/carlhako/cobble
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=cobble
+Group=cobble
+
+# Installed layout (design.md D5).
+WorkingDirectory=/opt/cobble
+Environment=PYTHONUNBUFFERED=1
+Environment=COBBLE_BEDROCK_ROOT=/srv/bedrock
+Environment=COBBLE_STATE_DIR=/var/lib/cobble
+Environment=COBBLE_BACKUP_DIR=/backup
+EnvironmentFile=-/etc/cobble/cobble.env
+
+ExecStart=/opt/cobble/venv/bin/python -m cobble
+
+# A cobble crash becomes an outage of seconds, not until someone notices
+# (design.md — Risks). The child Bedrock server is re-spawned on cobble start
+# if it was running when cobble last stopped.
+Restart=on-failure
+RestartSec=3
+
+# On stop, cobble issues the Bedrock `stop` command and waits up to
+# COBBLE_SHUTDOWN_TIMEOUT (default 120s) for a clean save before escalating.
+# systemd must not SIGKILL cobble before that finishes: this value MUST exceed
+# COBBLE_SHUTDOWN_TIMEOUT (plus uvicorn's 10s connection-drain). Raise both
+# together if you raise the shutdown timeout.
+TimeoutStopSec=180
+KillMode=mixed
+KillSignal=SIGTERM
+
+# Hardening — cobble needs write access only to its own state, the Bedrock
+# tree, and the backup path.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/srv/bedrock /var/lib/cobble /backup
+StateDirectory=cobble
+
+[Install]
+WantedBy=multi-user.target

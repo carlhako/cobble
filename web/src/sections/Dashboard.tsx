@@ -1,0 +1,121 @@
+import { useEffect, useRef, useState } from "react";
+import { useStatus } from "../api/StatusContext";
+import { ServerControls } from "../components/ServerControls";
+import type { RunState } from "../api/client";
+
+const STATE_LABEL: Record<RunState, string> = {
+  stopped: "Stopped",
+  starting: "Starting",
+  running: "Running",
+  stopping: "Stopping",
+  crashed: "Crashed",
+  failed: "Failed to start",
+  recovery_abandoned: "Recovery abandoned",
+};
+
+function formatUptime(seconds: number | null): string {
+  if (seconds == null) return "—";
+  const s = Math.floor(seconds);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const parts = [d && `${d}d`, h && `${h}h`, m && `${m}m`, `${s % 60}s`].filter(Boolean);
+  return parts.join(" ");
+}
+
+/** Interpolate uptime between server frames so it counts up once a second
+ *  without needing a push for every tick. */
+function useLiveUptime(base: number | null, running: boolean): number | null {
+  const anchor = useRef<{ base: number; at: number } | null>(null);
+  const [, force] = useState(0);
+
+  if (base == null || !running) {
+    anchor.current = null;
+  } else if (anchor.current === null || Math.abs(anchor.current.base - base) > 2) {
+    anchor.current = { base, at: Date.now() };
+  }
+
+  useEffect(() => {
+    if (!running) return;
+    const id = setInterval(() => force((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [running]);
+
+  if (anchor.current === null) return null;
+  return anchor.current.base + (Date.now() - anchor.current.at) / 1000;
+}
+
+export function Dashboard() {
+  const { status, stale } = useStatus();
+  const run = status?.run_state;
+  const uptime = useLiveUptime(status?.uptime_seconds ?? null, run === "running");
+
+  return (
+    <section className={`section dashboard${stale ? " is-stale" : ""}`}>
+      <h1>Dashboard</h1>
+
+      <div className="cards">
+        <div className="card">
+          <div className="card-label">Server</div>
+          <div className={`card-value state-${run ?? "unknown"}`}>
+            {run ? STATE_LABEL[run] : "…"}
+          </div>
+        </div>
+        <div className="card">
+          <div className="card-label">Version</div>
+          <div className="card-value">{status?.version ?? "not installed"}</div>
+        </div>
+        <div className="card">
+          <div className="card-label">Uptime</div>
+          <div className="card-value">{formatUptime(uptime)}</div>
+        </div>
+        <div className="card">
+          <div className="card-label">Players online</div>
+          <div className="card-value">
+            {status ? status.online_players.length : "—"}
+            {status?.players_incomplete && (
+              <span className="badge" title="cobble could not observe the full session">
+                may be incomplete
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <ServerControls runState={run} disabled={stale} />
+
+      <div className="panel">
+        <h2>Online players</h2>
+        {status && status.online_players.length > 0 ? (
+          <ul className="player-list">
+            {status.online_players.map((p) => (
+              <li key={p.xuid}>
+                <span className="gamertag">{p.gamertag || "(unknown)"}</span>
+                <span className="xuid">{p.xuid}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="muted">No one is online.</p>
+        )}
+      </div>
+
+      <div className="panel">
+        <h2>Last shutdown</h2>
+        {status?.last_shutdown ? (
+          <p className={status.last_shutdown.clean ? "ok" : "warn"}>
+            {status.last_shutdown.clean
+              ? "Clean"
+              : "Unclean — server was forcibly terminated"}
+            <span className="muted">
+              {" "}
+              · {new Date(status.last_shutdown.at).toLocaleString()}
+            </span>
+          </p>
+        ) : (
+          <p className="muted">No shutdown recorded yet.</p>
+        )}
+      </div>
+    </section>
+  );
+}

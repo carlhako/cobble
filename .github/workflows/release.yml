@@ -1,0 +1,67 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Build the web interface. This is the ONLY place Node runs; the release
+      # artifact contains the compiled bundle, never the frontend source.
+      - name: Build frontend
+        run: |
+          npm --prefix web ci
+          npm --prefix web run build
+          test -f src/cobble/static/index.html
+
+      # Vendor every runtime dependency as a manylinux wheel so the install
+      # script needs no compiler and no PyPI access on the target host.
+      - name: Build dependency wheelhouse
+        run: |
+          python -m pip install --upgrade pip
+          pip download . \
+            --dest wheelhouse \
+            --only-binary=:all: \
+            --platform manylinux2014_x86_64 \
+            --python-version 311 \
+            --implementation cp \
+            --abi cp311
+
+      - name: Assemble release tarball
+        run: |
+          stage="$(mktemp -d)/cobble"
+          mkdir -p "$stage"
+          # Python package incl. the pre-built static/ bundle:
+          cp -a src pyproject.toml README.md deploy "$stage/"
+          cp -a wheelhouse "$stage/"
+          # Guard: no frontend source may ship.
+          if find "$stage" -path '*/web/*' -o -name '*.tsx' -o -name 'vite.config.ts' | grep -q .; then
+            echo "frontend source leaked into the tarball" >&2
+            exit 1
+          fi
+          test -f "$stage/src/cobble/static/index.html"
+          tar -czf cobble.tar.gz -C "$(dirname "$stage")" cobble
+          cp deploy/install.sh install.sh
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            cobble.tar.gz
+            install.sh
+          fail_on_unmatched_files: true
