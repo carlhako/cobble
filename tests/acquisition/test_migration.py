@@ -224,7 +224,6 @@ async def test_documented_revert_restores_a_runnable_m1_installation(
         os.replace(layout.data_dir / name, active / name)
     shutil.rmtree(layout.data_dir)
     (layout.state_dir / "layout_migration.json").unlink()
-    (layout.state_dir / "schedule.json").unlink(missing_ok=True)
     # -----------------------------------------------------------
 
     assert (vdir / "worlds" / "Home" / "level.dat").read_bytes() == b"NBT-root"

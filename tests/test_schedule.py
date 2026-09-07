@@ -157,29 +157,40 @@ async def test_backup_only_schedule_never_checks_for_updates(tmp_path) -> None:
     assert backup.captured == ["scheduled"]
 
 
-# -- 7.1 missed window ---------------------------------------
-async def test_missed_window_runs_once_shortly_after_start(tmp_path) -> None:
-    # cobble comes up at 05:00, after the 04:00 window it was down for.
+# -- 7.1 a missed window is skipped, not caught up -----------
+async def test_missed_window_is_skipped_until_the_next_day(tmp_path) -> None:
+    # cobble starts at 05:00, after the 04:00 window it was down for. No
+    # catch-up: the next run is simply tomorrow's 04:00, and the loop's own
+    # decision to run that pending target is False until the target arrives.
     clock = _Clock(datetime(2026, 6, 1, 5, 0))
-    backup, update = _StubBackup(), _StubUpdate(_check(up_to_date=True))
-    sch = Scheduler(_settings(tmp_path), backup, update, clock=clock)
-    sch._load_marker()
-    assert sch._missed_window(clock()) is True
-    await sch._run_window(reason="catch-up")
-    assert backup.captured == ["scheduled"]
-    # marker recorded -> not considered missed again today
-    assert sch._missed_window(clock()) is False
+    sch = Scheduler(
+        _settings(tmp_path), _StubBackup(), _StubUpdate(_check(up_to_date=True)), clock=clock
+    )
+    assert sch.next_run() == datetime(2026, 6, 2, 4, 0)  # tomorrow, not "now"
+    # yesterday's 04:00 is long past -> never eligible to run
+    assert sch._should_run(datetime(2026, 6, 1, 4, 0), clock()) is False
 
 
-async def test_window_already_run_today_is_not_a_missed_window(tmp_path) -> None:
+async def test_should_run_only_within_the_jitter_grace_after_the_target(tmp_path) -> None:
+    sch = Scheduler(
+        _settings(tmp_path), _StubBackup(), _StubUpdate(_check(up_to_date=True)),
+        clock=_Clock(datetime(2026, 6, 1, 4, 0)),
+    )
+    target = datetime(2026, 6, 1, 4, 0)
+    assert sch._should_run(target, datetime(2026, 6, 1, 3, 59, 59)) is False  # not yet
+    assert sch._should_run(target, datetime(2026, 6, 1, 4, 0, 1)) is True  # on time
+    assert sch._should_run(target, datetime(2026, 6, 1, 4, 25)) is True  # small jitter
+    assert sch._should_run(target, datetime(2026, 6, 1, 4, 45)) is False  # woke too late
+
+
+async def test_no_schedule_state_file_is_written(tmp_path) -> None:
     s = _settings(tmp_path)
-    clock = _Clock(datetime(2026, 6, 1, 5, 0))
-    sch = Scheduler(s, _StubBackup(), _StubUpdate(_check(up_to_date=True)), clock=clock)
-    sch._record_window(clock())
-    # a fresh scheduler over the same state dir (a restart) reads the marker
-    sch2 = Scheduler(s, _StubBackup(), _StubUpdate(_check(up_to_date=True)), clock=clock)
-    sch2._load_marker()
-    assert sch2._missed_window(clock()) is False
+    sch = Scheduler(
+        s, _StubBackup(), _StubUpdate(_check(up_to_date=True)),
+        clock=_Clock(datetime(2026, 6, 1, 4, 1)),
+    )
+    await sch.run_now()
+    assert not (s.state_dir / "schedule.json").exists()
 
 
 # -- 7.4 on-demand reuses the sequence -----------------------

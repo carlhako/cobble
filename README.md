@@ -112,7 +112,7 @@ cd /srv/bedrock
 mv data/worlds "$(readlink current)/worlds"
 mv data/server.properties data/allowlist.json data/permissions.json "$(readlink current)/"
 rm -rf data
-rm /var/lib/cobble/layout_migration.json /var/lib/cobble/schedule.json
+rm /var/lib/cobble/layout_migration.json
 # then install the M1 release and start it
 ```
 

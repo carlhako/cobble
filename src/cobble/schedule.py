@@ -3,19 +3,21 @@
 An asyncio task computes the next run in local wall-clock time and sleeps until
 it. The nightly window is one ordered sequence — a scheduled backup, then an
 update check that applies an available update — so the server is stopped at most
-once when both are due (task 7.2). A window missed while cobble was down runs
-once shortly after the next start (task 7.1). The schedule is configurable and
-disableable; on-demand backup and update reuse the same sequences (7.3, 7.4).
+once when both are due (task 7.2).
+
+A window missed because cobble was down at the scheduled time is simply skipped;
+the next run is the following day's window. There is no catch-up — waking hours
+later and stopping the server at an unexpected time is worse than waiting one
+day for the next scheduled backup. The schedule is configurable and disableable;
+on-demand backup and update reuse the same sequence (7.3, 7.4).
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 from collections.abc import Callable
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from cobble.backup.service import BackupService
 from cobble.logging import get_logger
@@ -27,9 +29,10 @@ log = get_logger("schedule")
 # The scheduler wakes at least this often to re-evaluate the next run, so a
 # config change or a DST shift is picked up without a restart.
 _MAX_SLEEP = 900.0
-# A window that should have run within this margin of "now" still counts as due
-# (covers a slightly late wake-up and the missed-window catch-up).
-_DUE_MARGIN = timedelta(minutes=30)
+# Absorbs event-loop jitter: a wake-up within this margin *after* the target
+# still runs that window. It is not catch-up — once we are further past the
+# target than this, the window is skipped until the next day.
+_JITTER_GRACE = timedelta(minutes=30)
 
 
 def parse_hhmm(value: str) -> tuple[int, int] | None:
@@ -59,16 +62,13 @@ class Scheduler:
         self._backup = backup
         self._update = update
         self._clock = clock
-        self._marker = settings.state_dir / "schedule.json"
         self._task: asyncio.Task[None] | None = None
         self._window_lock = asyncio.Lock()
-        self._last_window: str | None = None  # ISO date of the last window run
 
     # -- schedule maths ---------------------------------------
     def _enabled(self) -> bool:
-        return (
-            parse_hhmm(self._settings.maintenance_time) is not None
-            and (self._settings.backup_enabled or self._settings.update_enabled)
+        return parse_hhmm(self._settings.maintenance_time) is not None and (
+            self._settings.backup_enabled or self._settings.update_enabled
         )
 
     def next_run(self) -> datetime | None:
@@ -83,32 +83,13 @@ class Scheduler:
         today = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
         return today if today > now else today + timedelta(days=1)
 
-    def _missed_window(self, now: datetime) -> bool:
-        """True when today's window time has passed, cobble was down for it, and
-        it has not already run today."""
-        hh, mm = parse_hhmm(self._settings.maintenance_time)  # type: ignore[misc]
-        todays = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-        if now < todays:
-            return False
-        return self._last_window != now.date().isoformat()
-
-    # -- persistence -----------------------------------------
-    def _load_marker(self) -> None:
-        try:
-            self._last_window = json.loads(self._marker.read_text()).get("last_window")
-        except (OSError, ValueError):
-            self._last_window = None
-
-    def _record_window(self, day: datetime) -> None:
-        self._last_window = day.date().isoformat()
-        self._marker.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._marker.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"last_window": self._last_window}))
-        tmp.replace(self._marker)
+    def _should_run(self, target: datetime, now: datetime) -> bool:
+        """Run ``target``'s window iff we have reached it and are not so far
+        past it that the window should be skipped until the next day."""
+        return target <= now <= target + _JITTER_GRACE
 
     # -- lifecycle ------------------------------------------
     async def start(self) -> None:
-        self._load_marker()
         self._task = asyncio.create_task(self._loop(), name="cobble-scheduler")
 
     async def stop(self) -> None:
@@ -120,9 +101,6 @@ class Scheduler:
 
     async def _loop(self) -> None:
         try:
-            if self._enabled() and self._missed_window(self._clock()):
-                log.info("a scheduled maintenance window was missed while down; running it now")
-                await self._run_window(reason="catch-up")
             while True:
                 nxt = self.next_run()
                 if nxt is None:
@@ -130,9 +108,11 @@ class Scheduler:
                     continue
                 delay = (nxt - self._clock()).total_seconds()
                 await asyncio.sleep(max(0.0, min(delay, _MAX_SLEEP)))
-                now = self._clock()
-                if now >= nxt - _DUE_MARGIN and self._last_window != now.date().isoformat():
+                if self._should_run(nxt, self._clock()):
                     await self._run_window(reason="scheduled")
+                # Otherwise: either the sleep was clamped and we are not there
+                # yet (loop recomputes a shorter delay), or we woke so late the
+                # window is skipped until tomorrow.
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -148,8 +128,6 @@ class Scheduler:
             log.info("maintenance window already running; skipping the %s trigger", reason)
             return
         async with self._window_lock:
-            now = self._clock()
-            self._record_window(now)
             log.info("maintenance window starting (%s)", reason)
 
             did_update_backup = False
@@ -187,7 +165,3 @@ class Scheduler:
                     log.exception("scheduled backup failed")
 
             log.info("maintenance window complete (%s)", reason)
-
-    @property
-    def marker_path(self) -> Path:
-        return self._marker
