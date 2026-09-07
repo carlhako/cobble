@@ -15,7 +15,10 @@ def make_bedrock_zip(version: str, *, truncated: bool = False) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("bedrock_server", b"#!/bin/true\n" + b"x" * 4096)
-        zf.writestr("server.properties", f"# BDS {version}\nlevel-name=Bedrock level\n")
+        zf.writestr(
+            "server.properties",
+            f"# BDS {version}\nlevel-name=Bedrock level\nallow-list=true\nonline-mode=true\n",
+        )
         zf.writestr("permissions.json", "[]")
         zf.writestr("allowlist.json", "[]")
     data = buf.getvalue()

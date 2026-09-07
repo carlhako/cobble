@@ -40,6 +40,10 @@ installs and enables `cobble.service`. On first start cobble resolves the curren
 BDS version, downloads and extracts it into `/srv/bedrock/versions/<version>/`, and
 points `/srv/bedrock/current` at it.
 
+A fresh install sets `allow-list=false` in `server.properties` so the server is
+joinable on the LAN immediately. Turn the allowlist on from the console
+(`allowlist on` after `allowlist add <gamertag>`) if you want to restrict it.
+
 Open `http://<container-ip>:8000/` in a browser on the LAN.
 
 ## Filesystem layout

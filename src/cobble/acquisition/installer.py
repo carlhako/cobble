@@ -236,6 +236,31 @@ def _extract(archive: Path, dest_dir: Path) -> None:
     binary.chmod(0o755)
 
 
+def _apply_install_defaults(root: Path) -> None:
+    """Adjust the freshly-extracted ``server.properties`` for a LAN deployment.
+
+    The vendor ships ``allow-list=true``, which rejects every player until an
+    operator builds an allowlist by hand. cobble is LAN-only with no auth
+    (design.md D8 / Non-Goals), so a fresh install defaults the allowlist off;
+    an operator can turn it back on from the console (``allowlist on``) or,
+    later, from the configuration screen (M3).
+    """
+    props = root / "server.properties"
+    if not props.is_file():
+        return
+    lines = props.read_text().splitlines()
+    replaced = False
+    for i, line in enumerate(lines):
+        if line.strip().startswith("allow-list=") or line.strip().startswith("white-list="):
+            key = line.split("=", 1)[0]
+            lines[i] = f"{key}=false"
+            replaced = True
+    if not replaced:
+        lines.append("allow-list=false")
+    props.write_text("\n".join(lines) + "\n")
+    log.info("set allow-list=false in server.properties (LAN default)")
+
+
 def install_version(resolved: ResolvedVersion, layout: Layout, settings: Settings) -> Path:
     """Install ``resolved`` into ``versions/<version>/`` and return that path.
 
@@ -256,6 +281,7 @@ def install_version(resolved: ResolvedVersion, layout: Layout, settings: Setting
         extract_dir = staging / "root"
         extract_dir.mkdir()
         _extract(archive, extract_dir)
+        _apply_install_defaults(extract_dir)
         archive.unlink(missing_ok=True)
         # Atomic move into place. If a concurrent install won the race, keep theirs.
         try:

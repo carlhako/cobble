@@ -209,3 +209,16 @@ def test_download_falls_back_to_builtin_when_no_tool(tmp_settings: Settings, fak
     finally:
         mp.undo()
     assert dest.read_bytes() == fake_vendor.zip_bytes
+
+
+def test_install_defaults_allowlist_off_for_lan(tmp_settings: Settings, fake_vendor):
+    # A fresh install must be joinable on a LAN without hand-building an
+    # allowlist: cobble flips the vendor's allow-list=true to false on extract.
+    layout = Layout.from_settings(tmp_settings)
+    layout.ensure_directories()
+    resolved = ResolvedVersion(fake_vendor.version, fake_vendor.download_url)
+    vdir = install_version(resolved, layout, _vendor_settings(tmp_settings, fake_vendor))
+    props = (vdir / "server.properties").read_text()
+    assert "allow-list=false" in props
+    assert "allow-list=true" not in props
+    assert "online-mode=true" in props  # other settings untouched
