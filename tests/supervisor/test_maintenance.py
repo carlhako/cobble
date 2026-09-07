@@ -62,6 +62,22 @@ async def test_lifecycle_actions_rejected_during_maintenance(make_supervisor, ac
     await sup.stop()
 
 
+@pytest.mark.parametrize("action", ["start", "stop", "restart"])
+async def test_lifecycle_rejection_is_immediate_even_while_a_step_holds_the_lock(
+    make_supervisor, action
+) -> None:
+    # A maintenance step (e.g. awaiting readiness of a new version) can hold
+    # `_op_lock` for the readiness timeout. An operator's Stop/Restart must be
+    # rejected at once, not queue behind that wait.
+    sup: Supervisor = make_supervisor(shutdown_timeout=5.0)
+    await sup.start()
+    async with sup.maintenance_scope("updating"):
+        async with sup._op_lock:  # simulate a step holding the lock
+            with pytest.raises(MaintenanceInProgressError):
+                await asyncio.wait_for(getattr(sup, action)(), timeout=0.5)
+    await sup.stop()
+
+
 async def test_maintenance_refused_during_a_lifecycle_transition(make_supervisor) -> None:
     # 2.3 a maintenance operation cannot begin while a transition is in flight;
     # the request fails and no maintenance state is set.

@@ -319,13 +319,25 @@ class Supervisor:
         async with self._op_lock:
             await self._start_locked()
 
+    def _reject_if_maintenance(self) -> None:
+        """Fail fast on a lifecycle request while maintenance owns the server.
+
+        Read without ``_op_lock``: a maintenance step (e.g. awaiting readiness of
+        a new version) can hold the lock for the readiness timeout, and an
+        operator's Stop/Restart must not hang that long before being rejected.
+        The value only transitions under the lock, so a stale read still resolves
+        to a correct ``MaintenanceInProgressError`` on the recheck below.
+        """
+        if self._maintenance is not None:
+            raise MaintenanceInProgressError(
+                f"a {self._maintenance} operation is in progress"
+            )
+
     # -- lifecycle: start ------------------------------------------
     async def start(self) -> None:
+        self._reject_if_maintenance()
         async with self._op_lock:
-            if self._maintenance is not None:
-                raise MaintenanceInProgressError(
-                    f"a {self._maintenance} operation is in progress"
-                )
+            self._reject_if_maintenance()
             await self._start_locked()
 
     async def _start_locked(self) -> None:
@@ -477,11 +489,9 @@ class Supervisor:
 
     # -- lifecycle: stop ------------------------------------------
     async def stop(self, *, reason: str = "stop") -> None:
+        self._reject_if_maintenance()
         async with self._op_lock:
-            if self._maintenance is not None:
-                raise MaintenanceInProgressError(
-                    f"a {self._maintenance} operation is in progress"
-                )
+            self._reject_if_maintenance()
             await self._stop_locked(reason=reason)
 
     async def _stop_locked(self, *, reason: str) -> None:
@@ -552,11 +562,9 @@ class Supervisor:
 
     # -- lifecycle: restart --------------------------------------
     async def restart(self) -> None:
+        self._reject_if_maintenance()
         async with self._op_lock:
-            if self._maintenance is not None:
-                raise MaintenanceInProgressError(
-                    f"a {self._maintenance} operation is in progress"
-                )
+            self._reject_if_maintenance()
             if self._sm.state in (RunState.STARTING, RunState.RUNNING, RunState.STOPPING):
                 await self._stop_locked(reason="restart")
             elif self._sm.state != RunState.STOPPED:
