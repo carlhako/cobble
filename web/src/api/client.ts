@@ -44,10 +44,13 @@ export const api = {
   start: () => request<StatusPayload>("POST", "/server/start"),
   stop: () => request<StatusPayload>("POST", "/server/stop"),
   restart: () => request<StatusPayload>("POST", "/server/restart"),
+  bootstrap: () => request<StatusPayload>("POST", "/server/bootstrap"),
   status: () => request<StatusPayload>("GET", "/status"),
   sendCommand: (command: string) =>
     request<void>("POST", "/console/command", { command }),
 };
+
+export type BootstrapState = "skipped" | "not_needed" | "running" | "done" | "failed";
 
 export type RunState =
   | "stopped"
@@ -70,4 +73,6 @@ export interface StatusPayload {
   online_players: OnlinePlayer[];
   players_incomplete: boolean;
   last_shutdown: { clean: boolean; at: string } | null;
+  bootstrap: BootstrapState;
+  bootstrap_detail: string;
 }

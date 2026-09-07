@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -22,25 +23,57 @@ from cobble.settings import Settings
 
 log = get_logger("acquisition.installer")
 
+# The Bedrock zip is ~100 MB and served from a CDN that can be slow to start
+# streaming on a fresh container. Be patient with the connection and the gaps
+# between chunks, retry a few times, and only give up after real effort.
+_DOWNLOAD_TIMEOUT = httpx.Timeout(connect=30.0, read=180.0, write=60.0, pool=30.0)
+_DOWNLOAD_ATTEMPTS = 4
+_DOWNLOAD_BACKOFF = 5.0
+
 
 class InstallError(RuntimeError):
     pass
 
 
+def _download_once(url: str, dest: Path, settings: Settings) -> int:
+    total = 0
+    with httpx.Client(
+        headers={"User-Agent": settings.user_agent},
+        timeout=_DOWNLOAD_TIMEOUT,
+        follow_redirects=True,
+    ) as client:
+        with client.stream("GET", url) as resp:
+            resp.raise_for_status()
+            with dest.open("wb") as fh:
+                for chunk in resp.iter_bytes(chunk_size=1 << 16):
+                    fh.write(chunk)
+                    total += len(chunk)
+    if total == 0:
+        raise InstallError("download produced an empty file")
+    return total
+
+
 def _download(url: str, dest: Path, settings: Settings) -> None:
-    try:
-        with httpx.Client(
-            headers={"User-Agent": settings.user_agent},
-            timeout=httpx.Timeout(60.0),
-            follow_redirects=True,
-        ) as client:
-            with client.stream("GET", url) as resp:
-                resp.raise_for_status()
-                with dest.open("wb") as fh:
-                    for chunk in resp.iter_bytes(chunk_size=1 << 16):
-                        fh.write(chunk)
-    except httpx.HTTPError as exc:
-        raise InstallError(f"download failed: {exc}") from exc
+    last: Exception | None = None
+    for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
+        try:
+            size = _download_once(url, dest, settings)
+            log.info("downloaded %.1f MB from %s", size / 1_000_000, url)
+            return
+        except (httpx.HTTPError, InstallError) as exc:
+            last = exc
+            dest.unlink(missing_ok=True)
+            if attempt < _DOWNLOAD_ATTEMPTS:
+                wait = _DOWNLOAD_BACKOFF * attempt
+                log.warning(
+                    "download attempt %d/%d failed (%s); retrying in %.0fs",
+                    attempt,
+                    _DOWNLOAD_ATTEMPTS,
+                    exc,
+                    wait,
+                )
+                time.sleep(wait)
+    raise InstallError(f"download failed after {_DOWNLOAD_ATTEMPTS} attempts: {last}") from last
 
 
 def _extract(archive: Path, dest_dir: Path) -> None:

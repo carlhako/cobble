@@ -13,6 +13,7 @@ STATE_CHANGING = [
     ("post", "/api/server/start"),
     ("post", "/api/server/stop"),
     ("post", "/api/server/restart"),
+    ("post", "/api/server/bootstrap"),
     ("post", "/api/console/command"),
 ]
 READ_ONLY = [
@@ -38,6 +39,7 @@ def test_openapi_lists_every_route(client: TestClient) -> None:
         "/api/server/start",
         "/api/server/stop",
         "/api/server/restart",
+        "/api/server/bootstrap",
         "/api/console/stream",
         "/api/console/command",
         "/api/status",

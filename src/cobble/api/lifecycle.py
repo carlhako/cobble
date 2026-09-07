@@ -52,4 +52,12 @@ def build_lifecycle_router(runtime: Runtime) -> APIRouter:
             raise http_error_from_supervisor(exc) from exc
         return _status()
 
+    @router.post(
+        "/bootstrap",
+        summary="Acquire a Bedrock installation now (retry first-run bootstrap)",
+    )
+    async def bootstrap() -> dict:
+        await runtime.run_bootstrap()
+        return _status()
+
     return router

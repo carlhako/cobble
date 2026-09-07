@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useStatus } from "../api/StatusContext";
 import { ServerControls } from "../components/ServerControls";
-import type { RunState } from "../api/client";
+import { ApiCallError, api, type RunState } from "../api/client";
 
 const STATE_LABEL: Record<RunState, string> = {
   stopped: "Stopped",
@@ -45,14 +45,63 @@ function useLiveUptime(base: number | null, running: boolean): number | null {
   return anchor.current.base + (Date.now() - anchor.current.at) / 1000;
 }
 
+function BootstrapNotice({ state, detail }: { state: string; detail: string }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const retry = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.bootstrap();
+    } catch (e) {
+      setError(e instanceof ApiCallError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (state === "running") {
+    return (
+      <div className="panel bootstrap-notice" role="status">
+        <strong>Installing the Bedrock server…</strong>
+        <span className="muted">
+          {" "}
+          {detail || "downloading — this can take a few minutes"}
+        </span>
+      </div>
+    );
+  }
+  if (state === "failed") {
+    return (
+      <div className="panel bootstrap-notice is-error" role="alert">
+        <strong>Bedrock server install failed.</strong>
+        <span className="muted"> {detail}</span>
+        <div>
+          <button className="btn btn-start" disabled={busy} onClick={retry}>
+            {busy ? "Retrying…" : "Retry install"}
+          </button>
+          {error && <span className="controls-error"> {error}</span>}
+        </div>
+      </div>
+    );
+  }
+  return null;
+}
+
 export function Dashboard() {
   const { status, stale } = useStatus();
   const run = status?.run_state;
   const uptime = useLiveUptime(status?.uptime_seconds ?? null, run === "running");
+  const bootstrapping = status?.bootstrap === "running";
 
   return (
     <section className={`section dashboard${stale ? " is-stale" : ""}`}>
       <h1>Dashboard</h1>
+
+      {status && (
+        <BootstrapNotice state={status.bootstrap} detail={status.bootstrap_detail} />
+      )}
 
       <div className="cards">
         <div className="card">
@@ -82,7 +131,7 @@ export function Dashboard() {
         </div>
       </div>
 
-      <ServerControls runState={run} disabled={stale} />
+      <ServerControls runState={run} disabled={stale || bootstrapping} />
 
       <div className="panel">
         <h2>Online players</h2>

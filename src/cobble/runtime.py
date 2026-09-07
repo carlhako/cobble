@@ -8,19 +8,23 @@ Wiring (design.md):
     ConsoleBuffer (owned by supervisor) ──listener──> Console fan-out ──> SSE clients
     StatusTracker ──> status SSE clients
 
-On startup the runtime bootstraps a Bedrock installation if none exists (a
-failure here is logged and surfaced, never fatal) and restores the server if it
-was running when cobble last stopped. On shutdown it stops the child cleanly.
+First-run bootstrap (acquiring a Bedrock installation when none exists) runs in
+the background so a slow ~100 MB download never blocks the web interface from
+loading. Its progress is surfaced in status; a failed bootstrap can be retried
+through the interface without restarting cobble.
 """
 
 from __future__ import annotations
+
+import asyncio
+import contextlib
+from dataclasses import dataclass
 
 from fastapi import FastAPI
 
 from cobble.acquisition.bootstrap import bootstrap_if_needed
 from cobble.acquisition.layout import Layout
 from cobble.acquisition.preflight import run_preflight
-from cobble.acquisition.version_source import VersionResolutionError
 from cobble.console.console import Console
 from cobble.events.bus import EventBus
 from cobble.events.parser import parse_line
@@ -30,6 +34,13 @@ from cobble.status.tracker import StatusTracker
 from cobble.supervisor.supervisor import Supervisor
 
 log = get_logger("runtime")
+
+
+@dataclass
+class BootstrapStatus:
+    # skipped | not_needed | running | done | failed
+    state: str = "skipped"
+    detail: str = ""
 
 
 class Runtime:
@@ -42,10 +53,12 @@ class Runtime:
             self.layout,
             line_sink=lambda line: self.bus.publish(parse_line(line)),
         )
+        self.bootstrap = BootstrapStatus()
         self.console = Console(self.supervisor)
-        self.status = StatusTracker(self.supervisor)
+        self.status = StatusTracker(self.supervisor, bootstrap=self.bootstrap)
         self.bus.subscribe(self.status.on_event)
         self._app: FastAPI | None = None
+        self._bootstrap_task: asyncio.Task[None] | None = None
 
     def attach(self, app: FastAPI) -> None:
         self._app = app
@@ -59,21 +72,54 @@ class Runtime:
         if not pre.ok:
             log.error("platform preflight failed: %s", "; ".join(pre.failures))
 
-        if not self.settings.bootstrap_on_start:
+        # Bootstrap + restore run in the background: the app is servable at once.
+        self._bootstrap_task = asyncio.create_task(
+            self._bootstrap_then_restore(), name="cobble-bootstrap"
+        )
+
+    async def _bootstrap_then_restore(self) -> None:
+        if self.settings.bootstrap_on_start:
+            await self.run_bootstrap()
+        else:
+            self.bootstrap.state = "skipped"
+            self.bootstrap.detail = "bootstrap_on_start is disabled"
             log.info("bootstrap_on_start is disabled; skipping first-run acquisition")
         try:
-            if self.settings.bootstrap_on_start:
-                outcome = bootstrap_if_needed(self.settings, self.layout)
-                log.info("bootstrap: %s", outcome.message)
-        except VersionResolutionError as exc:
-            # A version-check failure is a surfaced non-event: it must never block
-            # startup or stop a running server (design.md — Risks).
-            log.warning("first-run bootstrap could not resolve a version: %s", exc)
+            await self.supervisor.restore()
         except Exception:
-            log.exception("first-run bootstrap failed; continuing without an installation")
+            log.exception("restore failed")
 
-        await self.supervisor.restore()
+    async def run_bootstrap(self) -> BootstrapStatus:
+        """Acquire and activate a Bedrock installation if none is present.
+        Safe to call again after a failure. Never raises."""
+        if self.layout.has_installation():
+            self.bootstrap.state = "done"
+            self.bootstrap.detail = f"installed {self.layout.installed_version()}"
+            return self.bootstrap
+
+        self.bootstrap.state = "running"
+        self.bootstrap.detail = "acquiring the current Bedrock server"
+        self.status.notify()
+        log.info("first-run bootstrap: %s", self.bootstrap.detail)
+        try:
+            outcome = await asyncio.to_thread(bootstrap_if_needed, self.settings, self.layout)
+            self.bootstrap.state = "done"
+            self.bootstrap.detail = outcome.message
+            log.info("bootstrap: %s", outcome.message)
+        except Exception as exc:  # version resolution, download, extraction
+            self.bootstrap.state = "failed"
+            self.bootstrap.detail = str(exc)
+            log.exception(
+                "first-run bootstrap failed; the server can be started once "
+                "an installation is present"
+            )
+        self.status.notify()
+        return self.bootstrap
 
     async def shutdown(self) -> None:
         log.info("cobble runtime stopping")
+        if self._bootstrap_task is not None:
+            self._bootstrap_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._bootstrap_task
         await self.supervisor.aclose()

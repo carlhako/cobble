@@ -60,6 +60,8 @@ class StatusSnapshot:
     online_players: tuple[OnlinePlayer, ...]
     players_incomplete: bool
     last_shutdown: ShutdownView | None
+    bootstrap: str = "skipped"
+    bootstrap_detail: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -75,6 +77,8 @@ class StatusSnapshot:
                 if self.last_shutdown is None
                 else {"clean": self.last_shutdown.clean, "at": self.last_shutdown.at}
             ),
+            "bootstrap": self.bootstrap,
+            "bootstrap_detail": self.bootstrap_detail,
         }
 
 
@@ -84,14 +88,20 @@ class _Sub:
 
 
 class StatusTracker:
-    def __init__(self, supervisor: Supervisor, *, clock=time.monotonic) -> None:
+    def __init__(self, supervisor: Supervisor, *, clock=time.monotonic, bootstrap=None) -> None:
         self._sup = supervisor
         self._clock = clock
+        self._bootstrap = bootstrap  # object with .state / .detail, or None
         self._online: dict[str, str] = {}  # xuid -> gamertag
         self._incomplete = False
         self._subs: set[_Sub] = set()
 
         supervisor.subscribe_state(self._on_state_change)
+
+    def notify(self) -> None:
+        """Force a status push (used when a field the tracker doesn't observe,
+        e.g. bootstrap progress, has changed)."""
+        self._emit()
 
     # -- event ingestion --------------------------------------
     def on_event(self, event: Event) -> None:
@@ -138,6 +148,8 @@ class StatusTracker:
             ),
             players_incomplete=self._incomplete and self._sup.state == RunState.RUNNING,
             last_shutdown=None if rec is None else ShutdownView(clean=rec.clean, at=rec.at),
+            bootstrap=getattr(self._bootstrap, "state", "skipped"),
+            bootstrap_detail=getattr(self._bootstrap, "detail", ""),
         )
 
     def _emit(self) -> None:

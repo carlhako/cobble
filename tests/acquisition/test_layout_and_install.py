@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
+from cobble.acquisition import installer as installer_mod
 from cobble.acquisition.bootstrap import bootstrap_if_needed
 from cobble.acquisition.installer import InstallError, install_version
 from cobble.acquisition.layout import Layout
@@ -105,3 +107,43 @@ def test_bootstrap_installs_on_first_run_then_is_a_noop(
     assert second.version == fake_vendor.version
     assert len(fake_vendor.requests) == n_requests  # no new HTTP traffic
     assert layout.installed_version() == fake_vendor.version
+
+
+def test_download_retries_then_fails_with_a_bounded_message(
+    tmp_settings: Settings, monkeypatch, tmp_path
+) -> None:
+    # 2.3 (robustness): a flaky download is retried and, if it never succeeds,
+    # fails with one clear error rather than a raw timeout traceback.
+    monkeypatch.setattr(installer_mod, "_DOWNLOAD_BACKOFF", 0.0)
+    monkeypatch.setattr(installer_mod, "_DOWNLOAD_ATTEMPTS", 3)
+    calls = []
+
+    def boom(url, dest, settings):
+        calls.append(url)
+        raise httpx.ReadTimeout("the read operation timed out")
+
+    monkeypatch.setattr(installer_mod, "_download_once", boom)
+    with pytest.raises(InstallError) as ei:
+        installer_mod._download("http://x/y.zip", tmp_path / "z.zip", tmp_settings)
+    assert len(calls) == 3
+    assert "after 3 attempts" in str(ei.value)
+
+
+def test_download_succeeds_on_a_later_attempt(
+    tmp_settings: Settings, monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr(installer_mod, "_DOWNLOAD_BACKOFF", 0.0)
+    monkeypatch.setattr(installer_mod, "_DOWNLOAD_ATTEMPTS", 4)
+    attempts = {"n": 0}
+
+    def flaky(url, dest, settings):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise httpx.ConnectError("boom")
+        dest.write_bytes(b"payload")
+        return len(b"payload")
+
+    monkeypatch.setattr(installer_mod, "_download_once", flaky)
+    installer_mod._download("http://x/y.zip", tmp_path / "z.zip", tmp_settings)
+    assert attempts["n"] == 3
+    assert (tmp_path / "z.zip").read_bytes() == b"payload"
