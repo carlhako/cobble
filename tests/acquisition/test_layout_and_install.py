@@ -128,6 +128,7 @@ def test_download_resumes_across_stalls_and_assembles_the_full_file(
     # restart from zero — the partial file is kept and the Range request
     # continues from where it stopped.
     monkeypatch.setattr(installer_mod, "_DOWNLOAD_BACKOFF", 0.0)
+    monkeypatch.setattr(installer_mod, "_download_with_tool", lambda *a: False)
     payload = bytes(range(256)) * 400  # 102_400 bytes
     served = {"n": 0}
 
@@ -158,6 +159,7 @@ def test_download_aborts_after_repeated_no_progress(
 ) -> None:
     monkeypatch.setattr(installer_mod, "_DOWNLOAD_BACKOFF", 0.0)
     monkeypatch.setattr(installer_mod, "_DOWNLOAD_MAX_STALLED", 3)
+    monkeypatch.setattr(installer_mod, "_download_with_tool", lambda *a: False)
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "HEAD":
@@ -168,3 +170,42 @@ def test_download_aborts_after_repeated_no_progress(
     with pytest.raises(InstallError) as ei:
         installer_mod._download("http://cdn/y.zip", tmp_path / "z.zip", tmp_settings)
     assert "stalled" in str(ei.value)
+
+
+def test_download_prefers_curl_and_fetches_the_file(tmp_settings: Settings, fake_vendor, tmp_path):
+    # The system downloader (curl/wget) is used when present.
+    calls = {"tool": 0, "httpx": 0}
+    real_tool = installer_mod._download_with_tool
+    real_httpx = installer_mod._download_httpx
+
+    def tool_spy(url, dest):
+        calls["tool"] += 1
+        return real_tool(url, dest)
+
+    def httpx_spy(url, dest, settings):
+        calls["httpx"] += 1
+        return real_httpx(url, dest, settings)
+
+    installer_mod_patched = pytest.MonkeyPatch()
+    installer_mod_patched.setattr(installer_mod, "_download_with_tool", tool_spy)
+    installer_mod_patched.setattr(installer_mod, "_download_httpx", httpx_spy)
+    try:
+        dest = tmp_path / "bds.zip"
+        installer_mod._download(fake_vendor.download_url, dest, tmp_settings)
+    finally:
+        installer_mod_patched.undo()
+
+    assert dest.read_bytes() == fake_vendor.zip_bytes
+    assert calls["tool"] == 1
+    assert calls["httpx"] == 0  # curl succeeded; no fallback needed
+
+
+def test_download_falls_back_to_builtin_when_no_tool(tmp_settings: Settings, fake_vendor, tmp_path):
+    mp = pytest.MonkeyPatch()
+    mp.setattr(installer_mod.shutil, "which", lambda _name: None)  # hide curl + wget
+    try:
+        dest = tmp_path / "bds.zip"
+        installer_mod._download(fake_vendor.download_url, dest, tmp_settings)
+    finally:
+        mp.undo()
+    assert dest.read_bytes() == fake_vendor.zip_bytes

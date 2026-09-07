@@ -9,6 +9,7 @@ no partial version directory and never becomes the active version.
 from __future__ import annotations
 
 import shutil
+import subprocess
 import tempfile
 import time
 import zipfile
@@ -32,6 +33,7 @@ _DOWNLOAD_TIMEOUT = httpx.Timeout(connect=30.0, read=90.0, write=60.0, pool=30.0
 _DOWNLOAD_MAX_ATTEMPTS = 40
 _DOWNLOAD_MAX_STALLED = 6  # consecutive attempts with zero bytes gained -> abort
 _DOWNLOAD_BACKOFF = 5.0
+_DOWNLOAD_WALL_CLOCK = 1800.0  # 30 min hard cap for an external downloader
 # A browser-ish agent: some CDN edges throttle or stall unknown agents.
 _DOWNLOAD_UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -41,6 +43,68 @@ _DOWNLOAD_UA = (
 
 class InstallError(RuntimeError):
     pass
+
+
+def _download_with_tool(url: str, dest: Path) -> bool:
+    """Fetch ``url`` with curl or wget if available, resuming a partial file.
+
+    These are install-time dependencies and handle this CDN reliably, where
+    httpx has been observed to stall waiting for response headers. Returns
+    False if neither tool is installed; raises InstallError if the tool ran
+    but failed.
+    """
+    if shutil.which("curl"):
+        cmd = [
+            "curl",
+            "--fail",
+            "--location",
+            "--show-error",
+            "--silent",
+            "--retry",
+            "8",
+            "--retry-delay",
+            "5",
+            "--retry-all-errors",
+            "--continue-at",
+            "-",
+            "--connect-timeout",
+            "30",
+            "--user-agent",
+            _DOWNLOAD_UA,
+            "--output",
+            str(dest),
+            url,
+        ]
+        tool = "curl"
+    elif shutil.which("wget"):
+        cmd = [
+            "wget",
+            "--continue",
+            "--tries",
+            "8",
+            "--timeout",
+            "60",
+            "--user-agent",
+            _DOWNLOAD_UA,
+            "-O",
+            str(dest),
+            url,
+        ]
+        tool = "wget"
+    else:
+        return False
+
+    log.info("downloading with %s", tool)
+    try:
+        # Fixed argv, no shell.
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=_DOWNLOAD_WALL_CLOCK)
+    except subprocess.TimeoutExpired as exc:
+        raise InstallError(f"{tool} did not finish within {_DOWNLOAD_WALL_CLOCK:.0f}s") from exc
+    if proc.returncode != 0:
+        raise InstallError(
+            f"{tool} exited {proc.returncode}: {(proc.stderr or proc.stdout).strip()[-400:]}"
+        )
+    return True
 
 
 def _content_length(client: httpx.Client, url: str) -> int | None:
@@ -54,12 +118,39 @@ def _content_length(client: httpx.Client, url: str) -> int | None:
 
 
 def _download(url: str, dest: Path, settings: Settings) -> None:
-    """Download ``url`` to ``dest``, resuming across stalls and transient errors.
+    """Download ``url`` to ``dest``.
 
-    Each attempt requests ``bytes=<have>-`` and appends what it receives. An
-    attempt that gains nothing counts as stalled; the download aborts only after
-    several consecutive stalls with no forward progress at all.
+    Prefers a system ``curl``/``wget`` (reliable against this CDN); falls back to
+    a built-in resumable HTTP client if neither is present.
     """
+    try:
+        if _download_with_tool(url, dest):
+            _verify_download(url, dest)
+            return
+        log.warning("no curl/wget available; using the built-in downloader")
+    except InstallError as exc:
+        log.warning("%s; falling back to the built-in downloader", exc)
+        dest.unlink(missing_ok=True)
+    _download_httpx(url, dest, settings)
+
+
+def _verify_download(url: str, dest: Path) -> None:
+    size = dest.stat().st_size if dest.exists() else 0
+    if size == 0:
+        raise InstallError("download produced an empty file")
+    with httpx.Client(
+        headers={"User-Agent": _DOWNLOAD_UA}, timeout=_DOWNLOAD_TIMEOUT, follow_redirects=True
+    ) as client:
+        expected = _content_length(client, url)
+    if expected and size != expected:
+        raise InstallError(f"download size mismatch: got {size} bytes, expected {expected}")
+    log.info("downloaded %.1f MB", size / 1_000_000)
+
+
+def _download_httpx(url: str, dest: Path, settings: Settings) -> None:
+    """Resumable built-in downloader: each attempt requests ``bytes=<have>-`` and
+    appends what it receives; aborts only after several attempts with no forward
+    progress at all."""
     del settings  # the download UA is fixed (see _DOWNLOAD_UA)
     headers = {"User-Agent": _DOWNLOAD_UA, "Accept-Encoding": "identity"}
     dest.unlink(missing_ok=True)
