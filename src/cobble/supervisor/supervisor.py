@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -34,6 +34,9 @@ from cobble.supervisor.state import RunState, StateMachine, TransitionError
 
 __all__ = [
     "AlreadyRunningError",
+    "MaintenanceConflictError",
+    "MaintenanceHandle",
+    "MaintenanceInProgressError",
     "NoInstallationError",
     "NotRunningError",
     "ReadinessTimeoutError",
@@ -47,6 +50,7 @@ log = get_logger("supervisor")
 
 LineSink = Callable[[str], None]
 StateListener = Callable[[RunState, RunState], None]
+MaintenanceListener = Callable[[str | None, str | None], None]
 
 
 class SupervisorError(RuntimeError):
@@ -75,6 +79,20 @@ class ReadinessTimeoutError(SupervisorError):
     code = "readiness_timeout"
 
 
+class MaintenanceInProgressError(SupervisorError):
+    """A lifecycle action was requested while a maintenance operation owns the
+    server's lifecycle (server-lifecycle spec)."""
+
+    code = "maintenance_in_progress"
+
+
+class MaintenanceConflictError(SupervisorError):
+    """A maintenance operation was requested while another one is already in
+    progress (update state machine spec, task 6.14)."""
+
+    code = "maintenance_conflict"
+
+
 @dataclass
 class ExitInfo:
     code: int | None
@@ -85,6 +103,28 @@ class ExitInfo:
 class CrashInfo:
     exit_code: int | None
     at: str  # ISO 8601 UTC of the unexpected exit
+
+
+class MaintenanceHandle:
+    """Passed to the body of :meth:`Supervisor.maintenance_scope`. Lets a multi-step
+    operation report its current step and observe an unexpected server exit that
+    happens while it owns the lifecycle."""
+
+    def __init__(self, supervisor: Supervisor, operation: str) -> None:
+        self._sup = supervisor
+        self.operation = operation
+
+    def set_step(self, step: str | None) -> None:
+        self._sup._set_maintenance_step(step)
+
+    async def wait_exit(self) -> ExitInfo:
+        """Await the next unexpected exit of the managed server while this
+        maintenance operation is in progress. Wrap in ``asyncio.timeout`` to
+        bound the wait (e.g. a post-readiness grace window)."""
+        fut = self._sup._maintenance_exit
+        if fut is None:
+            raise RuntimeError("maintenance is not active")
+        return await asyncio.shield(fut)
 
 
 class Supervisor:
@@ -110,11 +150,19 @@ class Supervisor:
         self._ready_event = asyncio.Event()
         self._stop_requested = False
         self._auto_restart_enabled = True
+        self._closing = False
 
         self._ready_at: float | None = None
         self._last_exit: ExitInfo | None = None
         self._last_crash: CrashInfo | None = None
         self._crash_times: list[float] = []
+
+        # Maintenance: a multi-step operation (update / restore / backup) that
+        # owns the server's lifecycle. Orthogonal to RunState (design.md D8).
+        self._maintenance: str | None = None
+        self._maintenance_step: str | None = None
+        self._maintenance_exit: asyncio.Future[ExitInfo] | None = None
+        self._maintenance_listeners: list[MaintenanceListener] = []
 
         self.console = ConsoleBuffer(settings.console_buffer_lines)
         self._last_shutdown = load_last_shutdown(settings.shutdown_record_file)
@@ -168,40 +216,147 @@ class Supervisor:
     def last_crash(self) -> CrashInfo | None:
         return self._last_crash
 
+    @property
+    def maintenance(self) -> str | None:
+        """The maintenance operation in progress, or ``None`` when idle."""
+        return self._maintenance
+
+    @property
+    def maintenance_step(self) -> str | None:
+        return self._maintenance_step
+
+    @property
+    def is_closing(self) -> bool:
+        """True once :meth:`aclose` has begun — cobble itself is shutting down."""
+        return self._closing
+
     def installed_version(self) -> str | None:
         return self._layout.installed_version()
 
     def subscribe_state(self, listener: StateListener) -> None:
         self._sm.subscribe(listener)
 
+    def subscribe_maintenance(self, listener: MaintenanceListener) -> None:
+        """Register a callback invoked with ``(operation, step)`` whenever a
+        maintenance operation begins, advances a step, or ends."""
+        self._maintenance_listeners.append(listener)
+
+    def _notify_maintenance(self) -> None:
+        for listener in list(self._maintenance_listeners):
+            try:
+                listener(self._maintenance, self._maintenance_step)
+            except Exception:
+                log.exception("maintenance listener raised; continuing")
+
+    def _set_maintenance_step(self, step: str | None) -> None:
+        self._maintenance_step = step
+        log.info("maintenance step: %s", step)
+        self._notify_maintenance()
+
     def set_line_sink(self, sink: LineSink) -> None:
         self._sink = sink
+
+    # -- maintenance interlock -----------------------------------
+    @contextlib.asynccontextmanager
+    async def maintenance_scope(self, operation: str) -> AsyncIterator[MaintenanceHandle]:
+        """Own the server's lifecycle for a multi-step operation.
+
+        While the block runs, ``start``/``stop``/``restart`` are rejected with
+        :class:`MaintenanceInProgressError`, automatic crash restart is
+        suspended, and an unexpected server exit is routed to
+        :meth:`MaintenanceHandle.wait_exit` instead of triggering recovery.
+
+        Entering fails with :class:`TransitionInProgressError` if a lifecycle
+        transition is in flight, or :class:`MaintenanceConflictError` if another
+        maintenance operation is already in progress.
+        """
+        if self._maintenance is not None:
+            raise MaintenanceConflictError(
+                f"a {self._maintenance} operation is already in progress"
+            )
+        # A lifecycle transition holds ``_op_lock`` for its whole duration.
+        # Fail fast rather than queue behind it (server-lifecycle spec 2.3).
+        if self._op_lock.locked() or self._sm.state in (RunState.STARTING, RunState.STOPPING):
+            raise TransitionInProgressError("a lifecycle transition is in progress")
+        async with self._op_lock:
+            if self._maintenance is not None:
+                raise MaintenanceConflictError(
+                    f"a {self._maintenance} operation is already in progress"
+                )
+            if self._sm.state in (RunState.STARTING, RunState.STOPPING):
+                raise TransitionInProgressError(
+                    f"a {self._sm.state.value} transition is in progress"
+                )
+            self._maintenance = operation
+            self._maintenance_step = None
+            self._maintenance_exit = asyncio.get_running_loop().create_future()
+            log.info("maintenance started: %s", operation)
+            self._notify_maintenance()
+        try:
+            yield MaintenanceHandle(self, operation)
+        finally:
+            async with self._op_lock:
+                fut, self._maintenance_exit = self._maintenance_exit, None
+                self._maintenance = None
+                self._maintenance_step = None
+                # A fresh crash-restart window applies after maintenance.
+                self._crash_times.clear()
+                self._auto_restart_enabled = True
+            if fut is not None and not fut.done():
+                fut.cancel()
+            log.info("maintenance ended: %s", operation)
+            self._notify_maintenance()
+
+    async def maintenance_stop(self, *, reason: str = "maintenance") -> None:
+        """Clean stop issued by the maintenance operation that holds the flag.
+        Bypasses the maintenance interlock; otherwise identical to :meth:`stop`."""
+        async with self._op_lock:
+            await self._stop_locked(reason=reason)
+
+    async def maintenance_start(self) -> None:
+        """Start issued by the maintenance operation that holds the flag.
+        Bypasses the maintenance interlock; otherwise identical to :meth:`start`."""
+        async with self._op_lock:
+            await self._start_locked()
 
     # -- lifecycle: start ------------------------------------------
     async def start(self) -> None:
         async with self._op_lock:
-            current = self._sm.state
-            if current in (RunState.STARTING, RunState.RUNNING):
-                raise AlreadyRunningError("the server is already running")
-            if current == RunState.STOPPING:
-                raise TransitionInProgressError("a stop is in progress")
-            if not self._layout.has_installation():
-                raise NoInstallationError("no Bedrock installation is present")
+            if self._maintenance is not None:
+                raise MaintenanceInProgressError(
+                    f"a {self._maintenance} operation is in progress"
+                )
+            await self._start_locked()
 
-            self._sm.transition(RunState.STARTING)
-            self._auto_restart_enabled = True
-            await self._spawn_and_await_ready()
+    async def _start_locked(self) -> None:
+        if self._closing:
+            raise TransitionInProgressError("cobble is shutting down")
+        current = self._sm.state
+        if current in (RunState.STARTING, RunState.RUNNING):
+            raise AlreadyRunningError("the server is already running")
+        if current == RunState.STOPPING:
+            raise TransitionInProgressError("a stop is in progress")
+        if not self._layout.has_installation():
+            raise NoInstallationError("no Bedrock installation is present")
+
+        self._sm.transition(RunState.STARTING)
+        self._auto_restart_enabled = True
+        await self._spawn_and_await_ready()
 
     async def _spawn_and_await_ready(self) -> None:
         self._stop_requested = False
         self._ready_event = asyncio.Event()
         self._ready_at = None
-        binary = self._layout.bedrock_server_binary()
+        # BDS resolves server.properties, worlds/, and the vendor payload relative
+        # to its working directory (design.md D2). That directory is data/: real
+        # mutable state, plus symlinks to the active version's payload.
+        self._layout.ensure_payload_symlinks()
+        run_binary = self._layout.run_binary
         # If prior output is retained, mark this process boundary so a restart is
         # distinguishable within the console history (server-console spec).
         if len(self.console) > 0:
             self.console.add_marker("— bedrock_server (re)starting —")
-        self._proc = BedrockProcess(binary, binary.parent)
+        self._proc = BedrockProcess(run_binary, self._layout.data_dir)
         await self._proc.start()
 
         self._pump_task = asyncio.create_task(self._pump_stdout(), name="cobble-stdout-pump")
@@ -273,6 +428,18 @@ class Supervisor:
         with contextlib.suppress(TransitionError):
             self._sm.transition(RunState.CRASHED)
         self.console.add_marker(f"— bedrock_server exited unexpectedly (code {code}) —")
+
+        if self._maintenance is not None:
+            # A maintenance operation owns lifecycle decisions: do not
+            # auto-restart. Hand the exit to it to act on (server-lifecycle spec).
+            log.warning(
+                "server exited during %s maintenance; routing exit to the operation",
+                self._maintenance,
+            )
+            if self._maintenance_exit is not None and not self._maintenance_exit.done():
+                self._maintenance_exit.set_result(self._last_exit)
+            return
+
         await self._handle_crash()
 
     async def _handle_crash(self) -> None:
@@ -311,6 +478,10 @@ class Supervisor:
     # -- lifecycle: stop ------------------------------------------
     async def stop(self, *, reason: str = "stop") -> None:
         async with self._op_lock:
+            if self._maintenance is not None:
+                raise MaintenanceInProgressError(
+                    f"a {self._maintenance} operation is in progress"
+                )
             await self._stop_locked(reason=reason)
 
     async def _stop_locked(self, *, reason: str) -> None:
@@ -382,6 +553,10 @@ class Supervisor:
     # -- lifecycle: restart --------------------------------------
     async def restart(self) -> None:
         async with self._op_lock:
+            if self._maintenance is not None:
+                raise MaintenanceInProgressError(
+                    f"a {self._maintenance} operation is in progress"
+                )
             if self._sm.state in (RunState.STARTING, RunState.RUNNING, RunState.STOPPING):
                 await self._stop_locked(reason="restart")
             elif self._sm.state != RunState.STOPPED:
@@ -397,6 +572,13 @@ class Supervisor:
     # -- cobble lifecycle coupling ------------------------------
     async def aclose(self) -> None:
         """Called when cobble itself is terminating. Stops the child cleanly."""
+        self._closing = True
+        if self._maintenance is not None:
+            log.warning(
+                "cobble terminating while a %s operation is in progress; stopping the "
+                "server cleanly — the operation must record itself as interrupted",
+                self._maintenance,
+            )
         async with self._op_lock:
             if self._sm.state in (RunState.STARTING, RunState.RUNNING, RunState.STOPPING):
                 await self._stop_locked(reason="cobble_terminate")

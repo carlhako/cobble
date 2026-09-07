@@ -19,6 +19,7 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
+from cobble.acquisition.version import is_newer
 from cobble.events.model import (
     Event,
     EventType,
@@ -60,6 +61,37 @@ class CrashView:
 
 
 @dataclass(frozen=True)
+class MaintenanceView:
+    operation: str  # updating | restoring | backing_up
+    step: str | None
+
+
+@dataclass(frozen=True)
+class VersionView:
+    installed: str | None
+    available: str | None  # None => no successful check yet (unknown)
+    up_to_date: bool | None  # None => unknown
+
+
+@dataclass(frozen=True)
+class UpdateView:
+    last_check_at: str | None
+    last_result: dict | None
+    next_scheduled_at: str | None
+    skipping: str | None  # the available version being skipped, or None
+    terminal: bool
+
+
+@dataclass(frozen=True)
+class BackupView:
+    last_at: str | None
+    last_ok: bool | None
+    next_scheduled_at: str | None
+    unhealthy: str | None  # reason backups are failing, or None
+    count: int
+
+
+@dataclass(frozen=True)
 class StatusSnapshot:
     run_state: RunState
     version: str | None
@@ -70,6 +102,10 @@ class StatusSnapshot:
     bootstrap: str = "skipped"
     bootstrap_detail: str = ""
     last_crash: CrashView | None = None
+    maintenance: MaintenanceView | None = None
+    version_info: VersionView | None = None
+    update: UpdateView | None = None
+    backup: BackupView | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -96,6 +132,42 @@ class StatusSnapshot:
                     "recovery": self.last_crash.recovery,
                 }
             ),
+            "maintenance": (
+                None
+                if self.maintenance is None
+                else {"operation": self.maintenance.operation, "step": self.maintenance.step}
+            ),
+            "version_info": (
+                None
+                if self.version_info is None
+                else {
+                    "installed": self.version_info.installed,
+                    "available": self.version_info.available,
+                    "up_to_date": self.version_info.up_to_date,
+                }
+            ),
+            "update": (
+                None
+                if self.update is None
+                else {
+                    "last_check_at": self.update.last_check_at,
+                    "last_result": self.update.last_result,
+                    "next_scheduled_at": self.update.next_scheduled_at,
+                    "skipping": self.update.skipping,
+                    "terminal": self.update.terminal,
+                }
+            ),
+            "backup": (
+                None
+                if self.backup is None
+                else {
+                    "last_at": self.backup.last_at,
+                    "last_ok": self.backup.last_ok,
+                    "next_scheduled_at": self.backup.next_scheduled_at,
+                    "unhealthy": self.backup.unhealthy,
+                    "count": self.backup.count,
+                }
+            ),
         }
 
 
@@ -105,15 +177,30 @@ class _Sub:
 
 
 class StatusTracker:
-    def __init__(self, supervisor: Supervisor, *, clock=time.monotonic, bootstrap=None) -> None:
+    def __init__(
+        self,
+        supervisor: Supervisor,
+        *,
+        clock=time.monotonic,
+        bootstrap=None,
+        update=None,
+        backup=None,
+        scheduler=None,
+    ) -> None:
         self._sup = supervisor
         self._clock = clock
         self._bootstrap = bootstrap  # object with .state / .detail, or None
+        self._update = update  # UpdateService or None
+        self._backup = backup  # BackupService or None
+        self._scheduler = scheduler  # Scheduler or None
         self._online: dict[str, str] = {}  # xuid -> gamertag
         self._incomplete = False
         self._subs: set[_Sub] = set()
 
         supervisor.subscribe_state(self._on_state_change)
+        # Maintenance step changes are pushed to connected clients without
+        # polling (server-status spec, task 8.3).
+        supervisor.subscribe_maintenance(lambda _op, _step: self._emit())
 
     def notify(self) -> None:
         """Force a status push (used when a field the tracker doesn't observe,
@@ -184,6 +271,77 @@ class StatusTracker:
                 if crash is None
                 else CrashView(exit_code=crash.exit_code, at=crash.at, recovery=recovery)
             ),
+            maintenance=(
+                None
+                if self._sup.maintenance is None
+                else MaintenanceView(
+                    operation=self._sup.maintenance, step=self._sup.maintenance_step
+                )
+            ),
+            version_info=self._version_view(),
+            update=self._update_view(),
+            backup=self._backup_view(),
+        )
+
+    def _next_scheduled(self) -> str | None:
+        if self._scheduler is None:
+            return None
+        nxt = self._scheduler.next_run()
+        return nxt.isoformat() if nxt is not None else None
+
+    def _version_view(self) -> VersionView | None:
+        installed = self._sup.installed_version()
+        available = self._update.available_version if self._update is not None else None
+        if self._update is None:
+            return VersionView(installed=installed, available=None, up_to_date=None)
+        if available is None:
+            up_to_date: bool | None = None  # no successful check yet (task 9.1)
+        elif installed is None:
+            up_to_date = None
+        else:
+            up_to_date = available == installed or not is_newer(available, installed)
+        return VersionView(installed=installed, available=available, up_to_date=up_to_date)
+
+    def _update_view(self) -> UpdateView | None:
+        if self._update is None:
+            return None
+        rec = self._update.last_result
+        available = self._update.available_version
+        return UpdateView(
+            last_check_at=self._update.last_check_at,
+            last_result=(
+                None
+                if rec is None
+                else {
+                    "status": rec.status,
+                    "at": rec.at,
+                    "detail": rec.detail,
+                    "from_version": rec.from_version,
+                    "to_version": rec.to_version,
+                    "step": rec.step,
+                }
+            ),
+            next_scheduled_at=self._next_scheduled(),
+            skipping=(
+                available if available and self._update.is_skipping(available) else None
+            ),
+            terminal=self._update.terminal,
+        )
+
+    def _backup_view(self) -> BackupView | None:
+        if self._backup is None:
+            return None
+        outcome = self._backup.last_outcome
+        try:
+            count = len(self._backup.store.list(verify=False))
+        except Exception:
+            count = 0
+        return BackupView(
+            last_at=outcome.at if outcome is not None else None,
+            last_ok=outcome.ok if outcome is not None else None,
+            next_scheduled_at=self._next_scheduled(),
+            unhealthy=self._backup.health,
+            count=count,
         )
 
     def _emit(self) -> None:

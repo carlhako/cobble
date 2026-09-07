@@ -348,3 +348,55 @@ h2 {
     height: 50vh;
   }
 }
+
+/* -- updates & backups (M2) -- */
+.panel.is-error {
+  border-color: var(--danger);
+}
+.panel.is-warn {
+  border-color: var(--warn);
+}
+.panel.is-busy {
+  border-color: var(--accent);
+}
+.panel.is-critical {
+  border-color: var(--danger);
+  background: var(--warn-weak);
+}
+.panel.is-critical strong {
+  color: var(--danger);
+}
+.diag-output {
+  margin-top: 0.6rem;
+  max-height: 18rem;
+  overflow: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.8rem;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  white-space: pre-wrap;
+}
+.backup-list {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+}
+.backup-list th,
+.backup-list td {
+  text-align: left;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.backup-list tr.is-unusable td {
+  color: var(--text-dim);
+}
+.confirm-restore {
+  margin-top: 0.75rem;
+}
+.confirm-restore code {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+}

@@ -94,6 +94,7 @@ export function Dashboard() {
   const run = status?.run_state;
   const uptime = useLiveUptime(status?.uptime_seconds ?? null, run === "running");
   const bootstrapping = status?.bootstrap === "running";
+  const maintenance = status?.maintenance ?? null;
 
   return (
     <section className={`section dashboard${stale ? " is-stale" : ""}`}>
@@ -131,7 +132,23 @@ export function Dashboard() {
         </div>
       </div>
 
-      <ServerControls runState={run} disabled={stale || bootstrapping} />
+      {maintenance && (
+        <div className="panel is-busy" role="status">
+          <strong>
+            {maintenance.operation === "updating"
+              ? "Update in progress"
+              : maintenance.operation === "restoring"
+                ? "Restore in progress"
+                : "Backup in progress"}
+          </strong>
+          {maintenance.step && <span className="muted"> · {maintenance.step}</span>}
+        </div>
+      )}
+
+      <ServerControls
+        runState={run}
+        disabled={stale || bootstrapping || maintenance !== null}
+      />
 
       <div className="panel">
         <h2>Online players</h2>

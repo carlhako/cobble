@@ -35,6 +35,13 @@ def test_defaults_load_with_no_config_file(monkeypatch) -> None:
     assert s.crash_restart_threshold >= 0
     assert s.versions_dir == Path("/srv/bedrock/versions")
     assert s.current_link == Path("/srv/bedrock/current")
+    assert s.data_dir == Path("/srv/bedrock/data")
+    # M2 settings — each with a documented default (task 11.1)
+    assert s.maintenance_time == "04:00"
+    assert s.backup_enabled is True
+    assert s.update_enabled is True
+    assert s.backup_retention == 7
+    assert s.update_grace_seconds == 60.0
 
 
 def test_settings_read_from_toml_file(tmp_path: Path, monkeypatch) -> None:

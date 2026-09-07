@@ -40,6 +40,55 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return (await resp.json()) as T;
 }
 
+export interface UpdateCheckResult {
+  installed: string | null;
+  available: string | null;
+  up_to_date: boolean;
+  skipped: boolean;
+  skipped_reason: string | null;
+  error: string | null;
+}
+
+export interface UpdateResult {
+  ok: boolean;
+  status: "success" | "up_to_date" | "skipped" | "aborted" | "rolled_back" | "terminal";
+  detail: string;
+  from_version: string | null;
+  to_version: string | null;
+  step: string | null;
+  rolled_back: boolean;
+  terminal: boolean;
+}
+
+export interface UpdateDiagnostics {
+  version: string | null;
+  step: string | null;
+  status: string;
+  detail: string;
+  output: string;
+  at: string;
+}
+
+export interface BackupEntry {
+  archive: string;
+  captured_at: string | null;
+  bedrock_version: string | null;
+  shutdown_clean: boolean | null;
+  size_bytes: number;
+  restorable: boolean;
+  reason: string | null;
+}
+
+export interface RestoreResult {
+  ok: boolean;
+  at: string;
+  archive: string;
+  replaced_capture: string | null;
+  needs_confirmation: boolean;
+  warning: string | null;
+  error: string | null;
+}
+
 export const api = {
   start: () => request<StatusPayload>("POST", "/server/start"),
   stop: () => request<StatusPayload>("POST", "/server/stop"),
@@ -48,6 +97,24 @@ export const api = {
   status: () => request<StatusPayload>("GET", "/status"),
   sendCommand: (command: string) =>
     request<void>("POST", "/console/command", { command }),
+
+  updatesCheck: () => request<UpdateCheckResult>("POST", "/updates/check"),
+  updatesApply: () => request<UpdateResult>("POST", "/updates/apply"),
+  updatesClearFailed: (version?: string) =>
+    request<{ cleared: string[] }>("POST", "/updates/clear-failed", {
+      version: version ?? null,
+    }),
+  updatesDiagnostics: () =>
+    request<{ diagnostics: UpdateDiagnostics | null }>("GET", "/updates/diagnostics"),
+
+  backupsList: () =>
+    request<{ backups: BackupEntry[]; unhealthy: string | null }>("GET", "/backups"),
+  backupsCapture: () =>
+    request<{ ok: boolean; error: string | null }>("POST", "/backups"),
+  backupsRestore: (archive: string, confirmOldVersion = false) =>
+    request<RestoreResult>("POST", `/backups/${encodeURIComponent(archive)}/restore`, {
+      confirm_old_version: confirmOldVersion,
+    }),
 };
 
 export type BootstrapState = "skipped" | "not_needed" | "running" | "done" | "failed";
@@ -66,6 +133,40 @@ export interface OnlinePlayer {
   gamertag: string;
 }
 
+export interface MaintenanceInfo {
+  operation: "updating" | "restoring" | "backing_up";
+  step: string | null;
+}
+
+export interface VersionInfo {
+  installed: string | null;
+  available: string | null;
+  up_to_date: boolean | null;
+}
+
+export interface UpdateInfo {
+  last_check_at: string | null;
+  last_result: {
+    status: string;
+    at: string;
+    detail: string;
+    from_version: string | null;
+    to_version: string | null;
+    step: string | null;
+  } | null;
+  next_scheduled_at: string | null;
+  skipping: string | null;
+  terminal: boolean;
+}
+
+export interface BackupInfo {
+  last_at: string | null;
+  last_ok: boolean | null;
+  next_scheduled_at: string | null;
+  unhealthy: string | null;
+  count: number;
+}
+
 export interface StatusPayload {
   run_state: RunState;
   version: string | null;
@@ -80,4 +181,8 @@ export interface StatusPayload {
     at: string;
     recovery: "none" | "restarting" | "running" | "abandoned" | "stopped";
   } | null;
+  maintenance: MaintenanceInfo | null;
+  version_info: VersionInfo | null;
+  update: UpdateInfo | null;
+  backup: BackupInfo | null;
 }

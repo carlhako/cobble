@@ -24,15 +24,19 @@ from fastapi import FastAPI
 
 from cobble.acquisition.bootstrap import bootstrap_if_needed
 from cobble.acquisition.layout import Layout
+from cobble.acquisition.migration import LayoutMigration, MigrationError
 from cobble.acquisition.preflight import run_preflight
 from cobble.acquisition.version_source import try_resolve_current_version
+from cobble.backup.service import BackupService
 from cobble.console.console import Console
 from cobble.events.bus import EventBus
 from cobble.events.parser import parse_line
 from cobble.logging import get_logger
+from cobble.schedule import Scheduler
 from cobble.settings import Settings
 from cobble.status.tracker import StatusTracker
 from cobble.supervisor.supervisor import Supervisor
+from cobble.update.service import UpdateService
 
 log = get_logger("runtime")
 
@@ -55,8 +59,18 @@ class Runtime:
             line_sink=lambda line: self.bus.publish(parse_line(line)),
         )
         self.bootstrap = BootstrapStatus()
+        self.backup = BackupService(settings, self.layout, self.supervisor)
+        self.update = UpdateService(settings, self.layout, self.supervisor, self.backup)
+        self.scheduler = Scheduler(settings, self.backup, self.update)
+        self.migration = LayoutMigration(settings, self.layout, self.supervisor, self.backup)
         self.console = Console(self.supervisor)
-        self.status = StatusTracker(self.supervisor, bootstrap=self.bootstrap)
+        self.status = StatusTracker(
+            self.supervisor,
+            bootstrap=self.bootstrap,
+            update=self.update,
+            backup=self.backup,
+            scheduler=self.scheduler,
+        )
         self.bus.subscribe(self.status.on_event)
         self._app: FastAPI | None = None
         self._bootstrap_task: asyncio.Task[None] | None = None
@@ -85,10 +99,31 @@ class Runtime:
             self.bootstrap.state = "skipped"
             self.bootstrap.detail = "bootstrap_on_start is disabled"
             log.info("bootstrap_on_start is disabled; skipping first-run acquisition")
+        await self._migrate_layout()
         try:
             await self.supervisor.restore()
         except Exception:
             log.exception("restore failed")
+        try:
+            await self.scheduler.start()
+        except Exception:
+            log.exception("scheduler failed to start")
+
+    async def _migrate_layout(self) -> None:
+        """Relocate a pre-separation (M1) installation before any server start
+        (task 4.5). A fresh or already-separated install is a no-op."""
+        try:
+            if not self.migration.needs_migration():
+                return
+            outcome = await self.migration.run()
+            if outcome.migrated:
+                log.info("layout migration: %s", outcome.reason)
+            else:
+                log.warning("layout migration not completed: %s", outcome.reason)
+        except MigrationError:
+            log.exception("layout migration could not run")
+        except Exception:
+            log.exception("layout migration failed unexpectedly")
 
     async def run_bootstrap(self) -> BootstrapStatus:
         """Acquire and activate a Bedrock installation if none is present.
@@ -130,4 +165,5 @@ class Runtime:
             self._bootstrap_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._bootstrap_task
+        await self.scheduler.stop()
         await self.supervisor.aclose()

@@ -51,11 +51,29 @@ Open `http://<container-ip>:8000/` in a browser on the LAN.
 ```
 /opt/cobble/venv/         virtualenv with cobble + deps installed (bundle included)
 /srv/bedrock/
-    versions/<version>/   extracted BDS, one directory per version
-    current -> versions/… symlink naming the active version
+    versions/<version>/   extracted BDS — pure vendor payload, one directory per version
+    current -> versions/… symlink naming the active version (the only thing an update swaps)
+    data/                 mutable state; BDS runs with this as its working directory
+        server.properties   real file (operator config)
+        allowlist.json      real file
+        permissions.json    real file
+        worlds/             real directory (LevelDB world; stable path across versions)
+        bedrock_server -> ../current/bedrock_server   vendor payload, symlinked in
+        definitions -> ../current/definitions         …and every other payload entry
 /var/lib/cobble/          cobble's own durable state (backed up as a unit)
-/backup/                  default backup destination (M2)
+/backup/                  backup destination — actively used from M2 (scheduled, pre-update, on demand)
 ```
+
+The world and the operator-editable config live under `/srv/bedrock/data/`, which
+a version swap never touches. Each version directory holds only files supplied by
+the vendor and can be removed without affecting the world. An update changes only
+the `current` symlink; the `data/` payload symlinks resolve through it.
+
+On first start against a **pre-M2 (M1) installation** — one whose world is still
+inside `versions/<current>/` — cobble performs a one-time migration: it takes a
+verified backup, moves `worlds/` and the config files into `data/`, lays out the
+payload symlinks, and records completion. The migration is safe to interrupt and
+never runs twice.
 
 ## Configuration
 
@@ -73,6 +91,33 @@ Cobble runs with no config file present.
 | `COBBLE_CRASH_RESTART_THRESHOLD` | `3` | Crashes in the window after which auto-restart is abandoned. `0` disables it. |
 | `COBBLE_CRASH_RESTART_WINDOW` | `300` | Sliding window in seconds for the threshold. |
 | `COBBLE_PORT` | `8000` | HTTP port. |
+| `COBBLE_MAINTENANCE_TIME` | `04:00` | Local `HH:MM` for the nightly window (scheduled backup, then update check — one server stop). Empty string disables all scheduled work; on-demand backup/update still work. |
+| `COBBLE_BACKUP_ENABLED` | `true` | Include a backup in the nightly window. |
+| `COBBLE_UPDATE_ENABLED` | `true` | Include an update check (and automatic apply) in the nightly window. |
+| `COBBLE_BACKUP_RETENTION` | `7` | Backups to keep. Older ones are pruned oldest-first; the most recent usable backup is never pruned. |
+| `COBBLE_UPDATE_GRACE_SECONDS` | `60` | After a new version signals readiness, seconds it must keep running before the update is called a success. An exit inside this window triggers automatic rollback. |
+
+Set the container timezone explicitly (`timedatectl set-timezone …`) — the nightly
+window runs in local wall-clock time. The resolved next-run time is shown in the
+web interface so a misconfigured zone is visible.
+
+### Reverting to a pre-M2 (M1) cobble release
+
+An M1 cobble release has no knowledge of `data/`, so reverting after the migration
+has run needs a manual move back, with the server stopped:
+
+```
+systemctl stop cobble
+cd /srv/bedrock
+mv data/worlds "$(readlink current)/worlds"
+mv data/server.properties data/allowlist.json data/permissions.json "$(readlink current)/"
+rm -rf data
+rm /var/lib/cobble/layout_migration.json /var/lib/cobble/schedule.json
+# then install the M1 release and start it
+```
+
+The pre-migration backup captured in `/backup/` also contains the world in a
+restorable archive if the move cannot be done by hand.
 
 ## Development
 

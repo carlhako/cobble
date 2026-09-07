@@ -120,6 +120,46 @@ class Settings(BaseSettings):
         description="Vendor endpoint listing current Bedrock download URLs.",
     )
 
+    # --- Backups (M2) -------------------------------------------------
+    backup_retention: int = Field(
+        default=7,
+        ge=1,
+        description=(
+            "Number of captured backups to retain. Older backups beyond this are "
+            "pruned oldest-first; the most recent usable backup is never pruned."
+        ),
+    )
+
+    # --- Nightly maintenance schedule (M2, design.md D7/D10) -----------
+    maintenance_time: str = Field(
+        default="04:00",
+        description=(
+            "Local wall-clock time (24h HH:MM) for the nightly maintenance window: a "
+            "scheduled backup followed by an update check, run as one ordered sequence "
+            "so the server is stopped at most once. Empty string disables all scheduled "
+            "work; on-demand backup and update still function."
+        ),
+    )
+    backup_enabled: bool = Field(
+        default=True,
+        description="Include a backup in the nightly maintenance window.",
+    )
+    update_enabled: bool = Field(
+        default=True,
+        description="Include an update check (and automatic apply) in the nightly window.",
+    )
+
+    # --- Updates (M2) -----------------------------------------------
+    update_grace_seconds: float = Field(
+        default=60.0,
+        ge=0.0,
+        description=(
+            "After a newly activated version signals readiness, the seconds it must "
+            "keep running before an update is treated as successful. An exit inside "
+            "this window triggers an automatic rollback."
+        ),
+    )
+
     console_buffer_lines: int = Field(
         default=2000,
         ge=1,
@@ -140,6 +180,16 @@ class Settings(BaseSettings):
     @property
     def current_link(self) -> Path:
         return self.bedrock_root / "current"
+
+    @property
+    def data_dir(self) -> Path:
+        """Stable home for Bedrock mutable state (world + operator config).
+
+        A sibling of ``versions/`` and ``current`` so a version swap never
+        touches it (design.md D1/D2). It is also BDS's working directory: the
+        vendor payload is symlinked in through ``current``.
+        """
+        return self.bedrock_root / "data"
 
     @property
     def shutdown_record_file(self) -> Path:

@@ -281,7 +281,9 @@ def install_version(resolved: ResolvedVersion, layout: Layout, settings: Setting
         extract_dir = staging / "root"
         extract_dir.mkdir()
         _extract(archive, extract_dir)
-        _apply_install_defaults(extract_dir)
+        # Fresh-install server.properties defaults are applied in data/ by the
+        # bootstrap, not here: a version directory holds pure vendor payload and
+        # no operator-editable state (installation spec; task 1.7).
         archive.unlink(missing_ok=True)
         # Atomic move into place. If a concurrent install won the race, keep theirs.
         try:

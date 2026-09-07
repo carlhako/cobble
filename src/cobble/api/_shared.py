@@ -29,6 +29,12 @@ def http_error_from_supervisor(exc: SupervisorError) -> HTTPException:
     )
 
 
+def conflict(code: str, detail: str) -> HTTPException:
+    """A 409 carrying a distinguishable ``error`` code (server-backups /
+    server-updates: conflicting-operation errors)."""
+    return HTTPException(status_code=409, detail={"error": code, "detail": detail})
+
+
 def sse_response(
     events: AsyncIterator,
     request: Request,

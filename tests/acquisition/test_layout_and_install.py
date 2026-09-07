@@ -1,6 +1,8 @@
-"""Tasks 2.3, 2.4, 2.5, 2.6."""
+"""Tasks 2.3, 2.4, 2.5, 2.6 (M1) and 1.3, 1.4, 1.6, 1.7 (M2 layout separation)."""
 
 from __future__ import annotations
+
+import os
 
 import httpx
 import pytest
@@ -8,7 +10,7 @@ import pytest
 from cobble.acquisition import installer as installer_mod
 from cobble.acquisition.bootstrap import bootstrap_if_needed
 from cobble.acquisition.installer import InstallError, install_version
-from cobble.acquisition.layout import Layout
+from cobble.acquisition.layout import MUTABLE_ENTRIES, Layout
 from cobble.acquisition.version_source import ResolvedVersion
 from cobble.settings import Settings
 
@@ -20,7 +22,7 @@ def _vendor_settings(tmp_settings: Settings, fake_vendor) -> Settings:
 
 
 def test_directory_bootstrap_creates_full_layout(tmp_settings: Settings, tmp_path) -> None:
-    # 2.5 first run on an empty host creates the full layout
+    # 2.5 / 1.3 first run on an empty host creates the full layout, data/ included
     fresh = tmp_settings.model_copy(
         update={
             "bedrock_root": tmp_path / "fresh" / "srv" / "bedrock",
@@ -33,9 +35,107 @@ def test_directory_bootstrap_creates_full_layout(tmp_settings: Settings, tmp_pat
     layout.ensure_directories()
     assert layout.bedrock_root.is_dir()
     assert layout.versions_dir.is_dir()
+    assert layout.data_dir.is_dir()
+    assert (layout.data_dir / "worlds").is_dir()
     assert layout.state_dir.is_dir()
     assert layout.backup_dir.is_dir()
     layout.ensure_directories()  # idempotent
+    assert layout.data_dir.is_dir()
+
+
+def _install_two(tmp_settings: Settings, fake_vendor) -> Layout:
+    layout = Layout.from_settings(tmp_settings)
+    layout.ensure_directories()
+    s = _vendor_settings(tmp_settings, fake_vendor)
+    install_version(ResolvedVersion("1.0.0.1", fake_vendor.download_url), layout, s)
+    install_version(ResolvedVersion("2.0.0.1", fake_vendor.download_url), layout, s)
+    return layout
+
+
+def test_payload_symlinks_resolve_through_current_and_are_idempotent(
+    tmp_settings: Settings, fake_vendor
+) -> None:
+    # 1.4 each vendor-payload entry is linked into data/ and resolves to the
+    # active version; re-running changes nothing.
+    layout = _install_two(tmp_settings, fake_vendor)
+    layout.set_active_version("1.0.0.1")
+    layout.ensure_payload_symlinks()
+
+    link = layout.data_dir / "bedrock_server"
+    assert link.is_symlink()
+    assert os.readlink(link) == os.path.join("..", "current", "bedrock_server")
+    assert link.resolve() == (layout.version_dir("1.0.0.1") / "bedrock_server").resolve()
+    # no mutable entry was symlinked
+    for name in MUTABLE_ENTRIES:
+        assert not (layout.data_dir / name).is_symlink()
+
+    before = sorted((p.name, os.readlink(p)) for p in layout.data_dir.iterdir() if p.is_symlink())
+    layout.ensure_payload_symlinks()
+    after = sorted((p.name, os.readlink(p)) for p in layout.data_dir.iterdir() if p.is_symlink())
+    assert before == after
+
+
+def test_payload_symlinks_follow_version_swap_without_recreation(
+    tmp_settings: Settings, fake_vendor
+) -> None:
+    # 1.6 activation is a pure `current` swap: the data/ links are not touched
+    # yet resolve to the newly active version.
+    layout = _install_two(tmp_settings, fake_vendor)
+    layout.set_active_version("1.0.0.1")
+    layout.ensure_payload_symlinks()
+    link = layout.data_dir / "bedrock_server"
+    target_before = os.readlink(link)
+
+    layout.set_active_version("2.0.0.1")
+
+    assert os.readlink(link) == target_before  # link itself unchanged
+    assert link.resolve() == (layout.version_dir("2.0.0.1") / "bedrock_server").resolve()
+
+
+def test_version_swap_leaves_data_dir_untouched(tmp_settings: Settings, fake_vendor) -> None:
+    # 1.6 switching the active version modifies nothing under data/
+    layout = _install_two(tmp_settings, fake_vendor)
+    layout.set_active_version("1.0.0.1")
+    layout.ensure_payload_symlinks()
+    (layout.data_dir / "server.properties").write_text("level-name=Home\n")
+    (layout.data_dir / "worlds" / "Home").mkdir(parents=True)
+    (layout.data_dir / "worlds" / "Home" / "db").write_bytes(b"leveldb")
+
+    snapshot = {
+        str(p.relative_to(layout.data_dir)): (
+            os.readlink(p) if p.is_symlink() else p.read_bytes() if p.is_file() else "<dir>"
+        )
+        for p in sorted(layout.data_dir.rglob("*"))
+    }
+    layout.set_active_version("2.0.0.1")
+    after = {
+        str(p.relative_to(layout.data_dir)): (
+            os.readlink(p) if p.is_symlink() else p.read_bytes() if p.is_file() else "<dir>"
+        )
+        for p in sorted(layout.data_dir.rglob("*"))
+    }
+    assert after == snapshot
+
+
+def test_bootstrap_lays_out_data_and_version_dir_holds_no_mutable_state(
+    tmp_settings: Settings, fake_vendor
+) -> None:
+    # 1.7 a bootstrap from nothing produces a runnable, separated layout; the
+    # version directory carries no world and no operator-edited config.
+    s = _vendor_settings(tmp_settings, fake_vendor)
+    bootstrap_if_needed(s)
+    layout = Layout.from_settings(s)
+    vdir = layout.version_dir(fake_vendor.version)
+
+    # runnable: the spawn path (data/bedrock_server) resolves to a real binary
+    assert layout.run_binary.resolve() == (vdir / "bedrock_server").resolve()
+    assert (layout.data_dir / "server.properties").is_file()
+    assert not (layout.data_dir / "server.properties").is_symlink()
+    assert (layout.data_dir / "worlds").is_dir() and not (layout.data_dir / "worlds").is_symlink()
+
+    # version dir: no world, and its server.properties is the pristine vendor one
+    assert not (vdir / "worlds").exists()
+    assert "allow-list=true" in (vdir / "server.properties").read_text()
 
 
 def test_install_places_files_in_versioned_dir(tmp_settings: Settings, fake_vendor) -> None:
@@ -213,12 +313,19 @@ def test_download_falls_back_to_builtin_when_no_tool(tmp_settings: Settings, fak
 
 def test_install_defaults_allowlist_off_for_lan(tmp_settings: Settings, fake_vendor):
     # A fresh install must be joinable on a LAN without hand-building an
-    # allowlist: cobble flips the vendor's allow-list=true to false on extract.
-    layout = Layout.from_settings(tmp_settings)
-    layout.ensure_directories()
-    resolved = ResolvedVersion(fake_vendor.version, fake_vendor.download_url)
-    vdir = install_version(resolved, layout, _vendor_settings(tmp_settings, fake_vendor))
-    props = (vdir / "server.properties").read_text()
+    # allowlist: cobble flips the vendor's allow-list=true to false. This now
+    # happens in data/server.properties (the operator-config home), not in the
+    # version directory, which stays pure vendor payload (task 1.7).
+    s = _vendor_settings(tmp_settings, fake_vendor)
+    bootstrap_if_needed(s)
+    layout = Layout.from_settings(s)
+
+    vendor_props = (layout.version_dir(fake_vendor.version) / "server.properties").read_text()
+    assert "allow-list=true" in vendor_props  # version dir left untouched
+
+    props = (layout.data_dir / "server.properties").read_text()
     assert "allow-list=false" in props
     assert "allow-list=true" not in props
     assert "online-mode=true" in props  # other settings untouched
+    # server.properties in data/ is a real file, not a symlink into the payload.
+    assert not (layout.data_dir / "server.properties").is_symlink()
