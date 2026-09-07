@@ -105,7 +105,10 @@ chown "$SERVICE_USER:$SERVICE_USER" "$BACKUP_DIR" || warn "could not chown $BACK
 log "installing cobble.service"
 install -m 0644 "$src/deploy/cobble.service" /etc/systemd/system/cobble.service
 systemctl daemon-reload
-systemctl enable --now cobble.service
+systemctl enable cobble.service
+# `enable --now` does not restart an already-running unit, so restart explicitly
+# — this makes re-running the installer a working in-place upgrade.
+systemctl restart cobble.service
 
 log "done. cobble is starting; on first run it will download the current Bedrock server."
 log "open http://$(hostname -I | awk '{print $1}'):8000/ on the LAN"
