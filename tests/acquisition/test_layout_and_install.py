@@ -109,41 +109,62 @@ def test_bootstrap_installs_on_first_run_then_is_a_noop(
     assert layout.installed_version() == fake_vendor.version
 
 
-def test_download_retries_then_fails_with_a_bounded_message(
+def _mock_client_factory(handler):
+    """Return a callable matching httpx.Client(...) that routes through a
+    MockTransport, so installer._download's own Client() is intercepted."""
+    real = installer_mod.httpx.Client
+
+    def factory(*args, **kwargs):
+        kwargs.pop("timeout", None)
+        return real(*args, transport=httpx.MockTransport(handler), **kwargs)
+
+    return factory
+
+
+def test_download_resumes_across_stalls_and_assembles_the_full_file(
     tmp_settings: Settings, monkeypatch, tmp_path
 ) -> None:
-    # 2.3 (robustness): a flaky download is retried and, if it never succeeds,
-    # fails with one clear error rather than a raw timeout traceback.
+    # 2.3 (robustness): a CDN that stalls partway through does not force a
+    # restart from zero — the partial file is kept and the Range request
+    # continues from where it stopped.
     monkeypatch.setattr(installer_mod, "_DOWNLOAD_BACKOFF", 0.0)
-    monkeypatch.setattr(installer_mod, "_DOWNLOAD_ATTEMPTS", 3)
-    calls = []
+    payload = bytes(range(256)) * 400  # 102_400 bytes
+    served = {"n": 0}
 
-    def boom(url, dest, settings):
-        calls.append(url)
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"content-length": str(len(payload))})
+        start = 0
+        rng = request.headers.get("range")
+        if rng:
+            start = int(rng.split("=")[1].split("-")[0])
+        served["n"] += 1
+        # Hand back only ~30 KB per attempt, then "stall" (short read).
+        end = min(start + 30_000, len(payload))
+        body = payload[start:end]
+        status = 206 if rng else 200
+        headers = {"content-range": f"bytes {start}-{end - 1}/{len(payload)}"} if rng else {}
+        return httpx.Response(status, content=body, headers=headers)
+
+    monkeypatch.setattr(installer_mod.httpx, "Client", _mock_client_factory(handler))
+    dest = tmp_path / "z.zip"
+    installer_mod._download("http://cdn/y.zip", dest, tmp_settings)
+    assert dest.read_bytes() == payload
+    assert served["n"] >= 4  # took multiple resumed requests
+
+
+def test_download_aborts_after_repeated_no_progress(
+    tmp_settings: Settings, monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr(installer_mod, "_DOWNLOAD_BACKOFF", 0.0)
+    monkeypatch.setattr(installer_mod, "_DOWNLOAD_MAX_STALLED", 3)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"content-length": "999999"})
         raise httpx.ReadTimeout("the read operation timed out")
 
-    monkeypatch.setattr(installer_mod, "_download_once", boom)
+    monkeypatch.setattr(installer_mod.httpx, "Client", _mock_client_factory(handler))
     with pytest.raises(InstallError) as ei:
-        installer_mod._download("http://x/y.zip", tmp_path / "z.zip", tmp_settings)
-    assert len(calls) == 3
-    assert "after 3 attempts" in str(ei.value)
-
-
-def test_download_succeeds_on_a_later_attempt(
-    tmp_settings: Settings, monkeypatch, tmp_path
-) -> None:
-    monkeypatch.setattr(installer_mod, "_DOWNLOAD_BACKOFF", 0.0)
-    monkeypatch.setattr(installer_mod, "_DOWNLOAD_ATTEMPTS", 4)
-    attempts = {"n": 0}
-
-    def flaky(url, dest, settings):
-        attempts["n"] += 1
-        if attempts["n"] < 3:
-            raise httpx.ConnectError("boom")
-        dest.write_bytes(b"payload")
-        return len(b"payload")
-
-    monkeypatch.setattr(installer_mod, "_download_once", flaky)
-    installer_mod._download("http://x/y.zip", tmp_path / "z.zip", tmp_settings)
-    assert attempts["n"] == 3
-    assert (tmp_path / "z.zip").read_bytes() == b"payload"
+        installer_mod._download("http://cdn/y.zip", tmp_path / "z.zip", tmp_settings)
+    assert "stalled" in str(ei.value)

@@ -23,57 +23,110 @@ from cobble.settings import Settings
 
 log = get_logger("acquisition.installer")
 
-# The Bedrock zip is ~100 MB and served from a CDN that can be slow to start
-# streaming on a fresh container. Be patient with the connection and the gaps
-# between chunks, retry a few times, and only give up after real effort.
-_DOWNLOAD_TIMEOUT = httpx.Timeout(connect=30.0, read=180.0, write=60.0, pool=30.0)
-_DOWNLOAD_ATTEMPTS = 4
+# The Bedrock zip is ~100 MB from a CDN that, on a fresh container, frequently
+# starts streaming and then stalls. Restarting from zero on every stall means a
+# slow link never finishes, so the download is *resumable*: a stalled transfer
+# keeps its partial file and continues with a Range request. Give up only after
+# many attempts AND no forward progress.
+_DOWNLOAD_TIMEOUT = httpx.Timeout(connect=30.0, read=90.0, write=60.0, pool=30.0)
+_DOWNLOAD_MAX_ATTEMPTS = 40
+_DOWNLOAD_MAX_STALLED = 6  # consecutive attempts with zero bytes gained -> abort
 _DOWNLOAD_BACKOFF = 5.0
+# A browser-ish agent: some CDN edges throttle or stall unknown agents.
+_DOWNLOAD_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 cobble/0.1"
+)
 
 
 class InstallError(RuntimeError):
     pass
 
 
-def _download_once(url: str, dest: Path, settings: Settings) -> int:
-    total = 0
-    with httpx.Client(
-        headers={"User-Agent": settings.user_agent},
-        timeout=_DOWNLOAD_TIMEOUT,
-        follow_redirects=True,
-    ) as client:
-        with client.stream("GET", url) as resp:
-            resp.raise_for_status()
-            with dest.open("wb") as fh:
-                for chunk in resp.iter_bytes(chunk_size=1 << 16):
-                    fh.write(chunk)
-                    total += len(chunk)
-    if total == 0:
-        raise InstallError("download produced an empty file")
-    return total
+def _content_length(client: httpx.Client, url: str) -> int | None:
+    try:
+        r = client.head(url)
+        r.raise_for_status()
+        cl = r.headers.get("content-length")
+        return int(cl) if cl else None
+    except (httpx.HTTPError, ValueError):
+        return None
 
 
 def _download(url: str, dest: Path, settings: Settings) -> None:
-    last: Exception | None = None
-    for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
-        try:
-            size = _download_once(url, dest, settings)
-            log.info("downloaded %.1f MB from %s", size / 1_000_000, url)
-            return
-        except (httpx.HTTPError, InstallError) as exc:
-            last = exc
-            dest.unlink(missing_ok=True)
-            if attempt < _DOWNLOAD_ATTEMPTS:
-                wait = _DOWNLOAD_BACKOFF * attempt
-                log.warning(
-                    "download attempt %d/%d failed (%s); retrying in %.0fs",
-                    attempt,
-                    _DOWNLOAD_ATTEMPTS,
-                    exc,
-                    wait,
+    """Download ``url`` to ``dest``, resuming across stalls and transient errors.
+
+    Each attempt requests ``bytes=<have>-`` and appends what it receives. An
+    attempt that gains nothing counts as stalled; the download aborts only after
+    several consecutive stalls with no forward progress at all.
+    """
+    del settings  # the download UA is fixed (see _DOWNLOAD_UA)
+    headers = {"User-Agent": _DOWNLOAD_UA, "Accept-Encoding": "identity"}
+    dest.unlink(missing_ok=True)
+
+    with httpx.Client(headers=headers, timeout=_DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
+        expected = _content_length(client, url)
+        if expected:
+            log.info("expected download size: %.1f MB", expected / 1_000_000)
+
+        stalled = 0
+        last_exc: Exception | None = None
+        for attempt in range(1, _DOWNLOAD_MAX_ATTEMPTS + 1):
+            have = dest.stat().st_size if dest.exists() else 0
+            if expected and have >= expected:
+                break
+
+            clean = False
+            try:
+                req_headers = {"Range": f"bytes={have}-"} if have else {}
+                with client.stream("GET", url, headers=req_headers) as resp:
+                    if have and resp.status_code == 200:
+                        dest.unlink(missing_ok=True)  # server ignored Range; restart
+                        have = 0
+                    resp.raise_for_status()
+                    with dest.open("ab" if have else "wb") as fh:
+                        for chunk in resp.iter_bytes(chunk_size=1 << 16):
+                            fh.write(chunk)
+                clean = True
+            except (httpx.HTTPError, OSError) as exc:
+                last_exc = exc
+
+            now = dest.stat().st_size if dest.exists() else 0
+            # A clean stream to EOF means the body finished: done unless a
+            # Content-Length says otherwise.
+            if clean and (not expected or now >= expected):
+                break
+            if now > have:
+                stalled = 0
+                last_exc = None
+                log.info("download progress: %.1f MB", now / 1_000_000)
+                continue
+
+            stalled += 1
+            log.warning(
+                "download attempt %d gained nothing (%.1f MB so far): %s",
+                attempt,
+                now / 1_000_000,
+                last_exc or "connection closed early",
+            )
+            if stalled >= _DOWNLOAD_MAX_STALLED:
+                raise InstallError(
+                    f"download stalled at {now / 1_000_000:.1f} MB of "
+                    f"{f'{expected / 1_000_000:.1f} MB' if expected else 'unknown size'} "
+                    f"after {stalled} attempts with no progress: {last_exc}"
                 )
-                time.sleep(wait)
-    raise InstallError(f"download failed after {_DOWNLOAD_ATTEMPTS} attempts: {last}") from last
+            time.sleep(min(_DOWNLOAD_BACKOFF * stalled, 30))
+        else:
+            raise InstallError(
+                f"download did not complete after {_DOWNLOAD_MAX_ATTEMPTS} attempts: {last_exc}"
+            )
+
+    final = dest.stat().st_size if dest.exists() else 0
+    if final == 0:
+        raise InstallError("download produced an empty file")
+    if expected and final != expected:
+        raise InstallError(f"download size mismatch: got {final} bytes, expected {expected}")
+    log.info("downloaded %.1f MB", final / 1_000_000)
 
 
 def _extract(archive: Path, dest_dir: Path) -> None:
@@ -107,7 +160,7 @@ def install_version(resolved: ResolvedVersion, layout: Layout, settings: Setting
     staging = Path(tempfile.mkdtemp(prefix=f".{resolved.version}.", dir=layout.versions_dir))
     archive = staging / "bedrock-server.zip"
     try:
-        log.info("downloading BDS %s", resolved.version)
+        log.info("downloading BDS %s from %s", resolved.version, resolved.download_url)
         _download(resolved.download_url, archive, settings)
         extract_dir = staging / "root"
         extract_dir.mkdir()

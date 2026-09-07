@@ -25,6 +25,7 @@ from fastapi import FastAPI
 from cobble.acquisition.bootstrap import bootstrap_if_needed
 from cobble.acquisition.layout import Layout
 from cobble.acquisition.preflight import run_preflight
+from cobble.acquisition.version_source import try_resolve_current_version
 from cobble.console.console import Console
 from cobble.events.bus import EventBus
 from cobble.events.parser import parse_line
@@ -98,10 +99,17 @@ class Runtime:
             return self.bootstrap
 
         self.bootstrap.state = "running"
-        self.bootstrap.detail = "acquiring the current Bedrock server"
+        self.bootstrap.detail = "resolving the current Bedrock server version"
         self.status.notify()
         log.info("first-run bootstrap: %s", self.bootstrap.detail)
         try:
+            resolved = await asyncio.to_thread(try_resolve_current_version, self.settings)
+            if resolved is not None:
+                self.bootstrap.detail = (
+                    f"downloading {resolved.version} from {resolved.download_url}"
+                )
+                self.status.notify()
+                log.info("first-run bootstrap: %s", self.bootstrap.detail)
             outcome = await asyncio.to_thread(bootstrap_if_needed, self.settings, self.layout)
             self.bootstrap.state = "done"
             self.bootstrap.detail = outcome.message

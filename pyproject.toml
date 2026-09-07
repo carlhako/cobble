@@ -1,6 +1,6 @@
 [project]
 name = "cobble"
-version = "0.1.1"
+version = "0.1.2"
 description = "Supervised web control panel for a Minecraft Bedrock Dedicated Server"
 readme = "README.md"
 requires-python = ">=3.11"
