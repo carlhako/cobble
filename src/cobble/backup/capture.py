@@ -29,6 +29,7 @@ from cobble.backup.artifact import (
     sidecar_for,
 )
 from cobble.logging import get_logger
+from cobble.players.storage import DB_FILENAME, PlayerHistoryError, quiesce_database
 
 log = get_logger("backup.capture")
 
@@ -89,6 +90,17 @@ def capture_archive(
     partial = dest_dir / (base.removesuffix(".tar.gz") + PARTIAL_SUFFIX)
     sidecar = sidecar_for(archive)
     partial.unlink(missing_ok=True)
+
+    # Bring cobble's own durable state to a self-consistent, restorable form
+    # before the tar reads state_dir: the backup runs with BDS stopped but cobble
+    # still running, so cobble.db's WAL sidecars can otherwise be captured
+    # inconsistent with the main file (server-backups spec; design.md D6). A
+    # missing database is a no-op. Failure here fails the backup rather than
+    # producing a capture that cannot be relied upon.
+    try:
+        quiesce_database(layout.state_dir / DB_FILENAME)
+    except PlayerHistoryError as exc:
+        raise BackupError(f"could not quiesce cobble's durable state: {exc}") from exc
 
     if sources is None:
         sources = {CONTENT_DATA: layout.data_dir, CONTENT_STATE: layout.state_dir}

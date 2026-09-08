@@ -33,6 +33,8 @@ from cobble.console.console import Console
 from cobble.events.bus import EventBus
 from cobble.events.parser import parse_line
 from cobble.logging import get_logger
+from cobble.players.service import PlayerHistoryService
+from cobble.players.storage import PlayerHistoryError, PlayerStore, open_store
 from cobble.schedule import Scheduler
 from cobble.settings import Settings
 from cobble.status.tracker import StatusTracker
@@ -83,6 +85,24 @@ class Runtime:
             config=self.config,
         )
         self.bus.subscribe(self.status.on_event)
+
+        # Durable player history (M4). A database that cannot be opened is
+        # surfaced and the server still starts (server-players spec); the roster
+        # simply records nothing this run.
+        self.players: PlayerStore | None = None
+        self.player_history: PlayerHistoryService | None = None
+        try:
+            self.players = open_store(settings.player_db_file)
+        except PlayerHistoryError:
+            log.exception("player history unavailable; the roster will not record this run")
+        if self.players is not None:
+            self.player_history = PlayerHistoryService(
+                self.players,
+                self.supervisor,
+                self.bus,
+                checkpoint_seconds=settings.player_history_checkpoint_seconds,
+            )
+
         self._app: FastAPI | None = None
         self._bootstrap_task: asyncio.Task[None] | None = None
 
@@ -97,6 +117,12 @@ class Runtime:
         pre = run_preflight()
         if not pre.ok:
             log.error("platform preflight failed: %s", "; ".join(pre.failures))
+
+        if self.player_history is not None:
+            # Close sessions a previous run left open before the recorder can
+            # write any new event (server-players spec; tasks 4.2/4.3).
+            self.player_history.reconcile()
+            await self.player_history.start()
 
         # Bootstrap + restore run in the background: the app is servable at once.
         self._bootstrap_task = asyncio.create_task(
@@ -178,3 +204,7 @@ class Runtime:
                 await self._bootstrap_task
         await self.scheduler.stop()
         await self.supervisor.aclose()
+        if self.player_history is not None:
+            # After aclose(): the supervisor's clean stop has already fired the
+            # pre-stop hook that closes any still-open session.
+            await self.player_history.aclose()

@@ -160,6 +160,20 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Player history (M4) ----------------------------------------
+    player_history_checkpoint_seconds: float = Field(
+        default=300.0,
+        ge=1.0,
+        description=(
+            "How often, in seconds, the last-known-active time of every open player "
+            "session is refreshed while the server runs. It bounds how much playtime a "
+            "session can lose if cobble is killed without the chance to close it: on the "
+            "next start such a session is closed at its last checkpoint. Minutes, not "
+            "seconds — a clean stop and an observed exit both close sessions exactly, so "
+            "this only backstops genuine power loss."
+        ),
+    )
+
     console_buffer_lines: int = Field(
         default=2000,
         ge=1,
@@ -198,6 +212,11 @@ class Settings(BaseSettings):
     @property
     def runtime_state_file(self) -> Path:
         return self.state_dir / "runtime.json"
+
+    @property
+    def player_db_file(self) -> Path:
+        """The player-history database (M1's design reserved this path)."""
+        return self.state_dir / "cobble.db"
 
     @classmethod
     def settings_customise_sources(

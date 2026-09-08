@@ -77,6 +77,11 @@ def _read_effective_config(path: Path) -> dict[str, str]:
 LineSink = Callable[[str], None]
 StateListener = Callable[[RunState, RunState], None]
 MaintenanceListener = Callable[[str | None, str | None], None]
+# Fired with the wall-clock time the server is being stopped/has exited, so a
+# consumer (the player roster) can close records the server will never report on
+# (server-players spec; design.md D1). Both fire before the process is reaped.
+StopListener = Callable[[datetime], None]
+ExitListener = Callable[[datetime], None]
 
 
 class SupervisorError(RuntimeError):
@@ -195,6 +200,8 @@ class Supervisor:
         self._maintenance_step: str | None = None
         self._maintenance_exit: asyncio.Future[ExitInfo] | None = None
         self._maintenance_listeners: list[MaintenanceListener] = []
+        self._pre_stop_listeners: list[StopListener] = []
+        self._unexpected_exit_listeners: list[ExitListener] = []
 
         self.console = ConsoleBuffer(settings.console_buffer_lines)
         self._last_shutdown = load_last_shutdown(settings.shutdown_record_file)
@@ -285,6 +292,35 @@ class Supervisor:
         """Register a callback invoked with ``(operation, step)`` whenever a
         maintenance operation begins, advances a step, or ends."""
         self._maintenance_listeners.append(listener)
+
+    def subscribe_pre_stop(self, listener: StopListener) -> None:
+        """Register a callback fired with the stop time just before cobble stops
+        a running server — for any stop path (manual, restart, maintenance,
+        cobble shutdown). It runs before the process exit is reaped, so a
+        consumer can close records BDS will not report on shutdown (design.md
+        D1 tier 1)."""
+        self._pre_stop_listeners.append(listener)
+
+    def subscribe_unexpected_exit(self, listener: ExitListener) -> None:
+        """Register a callback fired with the detection time when the server
+        exits without having been asked to (design.md D1 tier 2)."""
+        self._unexpected_exit_listeners.append(listener)
+
+    def _notify_pre_stop(self) -> None:
+        now = datetime.now(UTC)
+        for listener in list(self._pre_stop_listeners):
+            try:
+                listener(now)
+            except Exception:
+                log.exception("pre-stop listener raised; continuing the stop")
+
+    def _notify_unexpected_exit(self) -> None:
+        now = datetime.now(UTC)
+        for listener in list(self._unexpected_exit_listeners):
+            try:
+                listener(now)
+            except Exception:
+                log.exception("unexpected-exit listener raised; continuing")
 
     def _notify_maintenance(self) -> None:
         for listener in list(self._maintenance_listeners):
@@ -481,6 +517,9 @@ class Supervisor:
         # Unexpected exit → crash. The recovery outcome is derived from the run
         # state that follows, so a single record here is enough.
         self._last_crash = CrashInfo(exit_code=code, at=datetime.now(UTC).isoformat())
+        # The server dropped every online player without reporting it; a consumer
+        # closes those records at the detection time (design.md D1 tier 2).
+        self._notify_unexpected_exit()
         with contextlib.suppress(TransitionError):
             self._sm.transition(RunState.CRASHED)
         self.console.add_marker(f"— bedrock_server exited unexpectedly (code {code}) —")
@@ -557,6 +596,9 @@ class Supervisor:
 
         self._stop_requested = True
         self._auto_restart_enabled = False
+        # Before the process goes away: BDS reports no per-player disconnects on
+        # shutdown, so a consumer must close those records itself (design.md D1).
+        self._notify_pre_stop()
         self._sm.transition(RunState.STOPPING)
         assert self._proc is not None
 
@@ -587,6 +629,7 @@ class Supervisor:
         """Kill the process without the graceful ``stop`` path (used on readiness
         timeout). Always recorded as unclean."""
         self._stop_requested = True
+        self._notify_pre_stop()
         if self._proc is not None:
             self._proc.kill()
             with contextlib.suppress(TimeoutError):

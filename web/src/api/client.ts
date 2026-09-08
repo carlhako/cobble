@@ -134,6 +134,44 @@ export interface ConfigWriteResult {
   pending: PendingChange[];
 }
 
+export type SessionEndReason =
+  "observed" | "server_stop" | "server_exit" | "reconstructed" | null;
+
+export interface RosterPlayer {
+  xuid: string;
+  gamertag: string;
+  total_playtime_seconds: number;
+  session_count: number;
+  first_seen: string;
+  last_seen: string;
+  online: boolean;
+  /** True when the total includes one or more reconstructed session ends. */
+  approximate: boolean;
+}
+
+export interface Roster {
+  players: RosterPlayer[];
+  /** ISO date from which history has been recorded, or null if nothing yet. */
+  recorded_since: string | null;
+}
+
+export interface PlayerSession {
+  connected_at: string;
+  spawned_at: string | null;
+  disconnected_at: string | null;
+  duration_seconds: number;
+  end_reason: SessionEndReason;
+  in_progress: boolean;
+  /** True when this session's end time was reconstructed, not observed. */
+  approximate: boolean;
+}
+
+export interface PlayerSessions {
+  xuid: string;
+  gamertag: string;
+  sessions: PlayerSession[];
+}
+
 export interface WorldInfo {
   name: string;
   is_current: boolean;
@@ -171,6 +209,10 @@ export const api = {
     request<RestoreResult>("POST", `/backups/${encodeURIComponent(archive)}/restore`, {
       confirm_old_version: confirmOldVersion,
     }),
+
+  players: () => request<Roster>("GET", "/players"),
+  playerSessions: (xuid: string) =>
+    request<PlayerSessions>("GET", `/players/${encodeURIComponent(xuid)}/sessions`),
 
   configRead: () => request<ConfigRead>("GET", "/config"),
   configWrite: (changes: Record<string, string>) =>

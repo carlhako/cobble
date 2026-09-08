@@ -209,6 +209,55 @@ h2 {
 .xuid {
   color: var(--text-dim);
 }
+
+/* -- players roster -- */
+.roster-list li,
+.session-list li {
+  border-bottom: 1px solid var(--border);
+}
+.roster-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "name total"
+    "meta meta";
+  gap: 0.1rem 0.75rem;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0.5rem 0.25rem;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.roster-row:hover {
+  background: var(--surface-hi, rgba(127, 127, 127, 0.08));
+}
+.roster-row.is-selected {
+  background: var(--surface-hi, rgba(127, 127, 127, 0.12));
+}
+.roster-row .gamertag {
+  grid-area: name;
+  font-weight: 600;
+}
+.roster-row .xuid {
+  grid-area: meta;
+  font-size: 0.8rem;
+}
+.player-list li.is-online .roster-row .gamertag {
+  color: var(--accent);
+}
+.badge-online {
+  background: var(--accent-weak, rgba(60, 180, 120, 0.16));
+  color: var(--accent);
+}
+.session-list li {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0.75rem;
+  align-items: baseline;
+}
 .ok {
   color: var(--accent);
 }

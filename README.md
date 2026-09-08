@@ -97,6 +97,7 @@ Cobble runs with no config file present.
 | `COBBLE_UPDATE_ENABLED` | `true` | Include an update check (and automatic apply) in the nightly window. |
 | `COBBLE_BACKUP_RETENTION` | `7` | Backups to keep. Older ones are pruned oldest-first; the most recent usable backup is never pruned. |
 | `COBBLE_UPDATE_GRACE_SECONDS` | `60` | After a new version signals readiness, seconds it must keep running before the update is called a success. An exit inside this window triggers automatic rollback. |
+| `COBBLE_PLAYER_HISTORY_CHECKPOINT_SECONDS` | `300` | How often the last-known-active time of each open player session is refreshed. Bounds the playtime a session can lose if cobble is killed without closing it — that session is closed at its last checkpoint on the next start. A clean stop or an observed exit still closes sessions exactly; this only backstops power loss. |
 
 Set the container timezone explicitly (`timedatectl set-timezone …`) — the nightly
 window runs in local wall-clock time. The resolved next-run time is shown in the
@@ -128,6 +129,37 @@ field, a value outside an enum) is rejected with a per-setting reason and nothin
 is written; a value of the right type that is merely outside cobble's recommended
 range is saved with a warning. Configuration writes are refused while an update,
 backup, or restore is in progress; reads stay available.
+
+### Players
+
+The **Players** section lists everyone who has played on this server — online now
+or not — with total playtime, session count, and when they were last seen.
+Selecting a player shows their individual sessions, most recent first, each with
+its start time, duration, and how it ended.
+
+Player history is kept in a small SQLite database at `<state_dir>/cobble.db`. It
+is written by a consumer of the same event stream the console uses; a write
+failure is logged and dropped, never interrupting the server. A player is
+identified by the stable `xuid` the server reports, so a display-name change
+keeps the same history — only the shown name updates, and each session also keeps
+the name as seen at the time.
+
+Playtime is only what cobble observed. Time the server ran without cobble
+watching is never credited. The Bedrock server reports no per-player disconnect
+when it shuts down, so cobble closes any still-open session itself: exactly, at
+the stop time, for any stop it initiates (manual, restart, nightly maintenance,
+update); exactly, at the detection time, for a server that exits on its own; and,
+only if cobble itself is killed without warning, approximately — the session is
+closed at its last checkpoint (see `COBBLE_PLAYER_HISTORY_CHECKPOINT_SECONDS`) on
+the next start. A session closed that last way is marked, and any total that
+includes one is shown as approximate (`~`) rather than exact.
+
+**History begins when recording begins.** There is no backfill source: an
+installation that ran before this release has no earlier history, and the roster
+shows the date from which history has been recorded so that an absence of early
+data reads as "never collected", not "lost". `cobble.db` is inside the backup set
+by virtue of living in `state_dir`, and a backup checkpoints it before capture so
+the restored copy opens cleanly.
 
 ### Reverting to a pre-M2 (M1) cobble release
 
