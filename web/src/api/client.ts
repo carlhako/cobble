@@ -89,7 +89,7 @@ export interface RestoreResult {
   error: string | null;
 }
 
-export type PropertyType = "bool" | "int" | "enum" | "string";
+export type PropertyType = "bool" | "int" | "float" | "enum" | "string";
 
 export interface PropertySchema {
   key: string;

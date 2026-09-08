@@ -11,10 +11,15 @@ operator-added key) is still read, still reported, and still editable as text
 (:func:`lookup` returns ``None`` for it). The schema improves the experience for
 keys cobble knows and never gates the ones it does not.
 
-Keys whose vendor type is a float — ``player-movement-*-threshold``,
-``server-build-radius-ratio`` — are intentionally absent: the type set here is
-bool / int / enum / string, and those keys degrade cleanly to editable text
-rather than being modelled imprecisely.
+The type set is bool / int / float / enum / string. A key cobble cannot type
+precisely (a value that is sometimes a keyword and sometimes a number, an enum
+whose full member set is uncertain) is modelled as ``string`` — still carrying a
+default and description, never rejecting a value.
+
+The table is maintained against the ``server.properties`` a current BDS ships and
+is checked against a live vendor file (``tests/config/test_schema.py``). An entry
+for a key a newer BDS renamed or dropped is removed when noticed; the old key, if
+still in someone's file, survives as an unrecognised text row.
 """
 
 from __future__ import annotations
@@ -35,6 +40,7 @@ __all__ = [
 class PropertyType(StrEnum):
     BOOL = "bool"
     INT = "int"
+    FLOAT = "float"
     ENUM = "enum"
     STRING = "string"
 
@@ -46,8 +52,8 @@ class PropertySchema:
     default: str
     description: str
     members: tuple[str, ...] | None = None  # ENUM only
-    minimum: int | None = None  # INT only, inclusive
-    maximum: int | None = None  # INT only, inclusive
+    minimum: float | None = None  # INT / FLOAT only, inclusive
+    maximum: float | None = None  # INT / FLOAT only, inclusive
 
     def to_dict(self) -> dict:
         return {
@@ -93,6 +99,19 @@ def _i(
 ) -> PropertySchema:
     return PropertySchema(
         key, PropertyType.INT, default, description, minimum=minimum, maximum=maximum
+    )
+
+
+def _f(
+    key: str,
+    default: str,
+    description: str,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> PropertySchema:
+    return PropertySchema(
+        key, PropertyType.FLOAT, default, description, minimum=minimum, maximum=maximum
     )
 
 
@@ -175,7 +194,18 @@ _ENTRIES: tuple[PropertySchema, ...] = (
         "false",
         "Require clients to accept the world's resource packs before joining.",
     ),
+    _s("transport", "raknet", "Network transport the server listens on (e.g. raknet)."),
     _b("content-log-file-enabled", "false", "Write content errors to a log file."),
+    _b(
+        "content-log-console-output-enabled",
+        "false",
+        "Echo content-log messages to the server console as well as the log file.",
+    ),
+    _s(
+        "content-log-level",
+        "info",
+        "Minimum severity written to the content log (e.g. verbose, info, warning, error).",
+    ),
     _i(
         "compression-threshold",
         "1",
@@ -189,21 +219,39 @@ _ENTRIES: tuple[PropertySchema, ...] = (
         ("zlib", "snappy"),
         "Algorithm used for packet compression.",
     ),
-    _e(
-        "server-authoritative-movement",
-        "server-auth",
-        ("client-auth", "server-auth", "server-auth-with-rewind"),
-        "Which side is trusted for player movement. Server-auth resists movement cheats.",
+    _b(
+        "server-authoritative-movement-strict",
+        "false",
+        "Reject and correct player movement that fails server-side validation.",
     ),
     _b(
-        "correct-player-movement",
+        "server-authoritative-dismount-strict",
         "false",
-        "Rubber-band players whose movement fails server-side checks.",
+        "Apply strict server-side validation to dismount actions.",
     ),
     _b(
-        "server-authoritative-block-breaking",
+        "server-authoritative-entity-interactions-strict",
         "false",
-        "Have the server, not the client, decide when a block breaks.",
+        "Apply strict server-side validation to entity interactions.",
+    ),
+    _f(
+        "player-position-acceptance-threshold",
+        "0.5",
+        "Blocks a client's reported position may diverge from the server's before it is corrected.",
+        minimum=0.0,
+    ),
+    _f(
+        "player-movement-action-direction-threshold",
+        "0.85",
+        "Tolerance (0-1) between a player's facing and an action's direction.",
+        minimum=0.0,
+        maximum=1.0,
+    ),
+    _f(
+        "server-authoritative-block-breaking-pick-range-scalar",
+        "1.5",
+        "Multiplier applied to the allowed block-breaking reach under server-authoritative mode.",
+        minimum=0.0,
     ),
     _e(
         "chat-restriction",
@@ -235,6 +283,26 @@ _ENTRIES: tuple[PropertySchema, ...] = (
         "disable-custom-skins",
         "false",
         "Reject player skins that are not built in.",
+    ),
+    _s(
+        "server-build-radius-ratio",
+        "Disabled",
+        '"Disabled", or a ratio 0.0-1.0 of the simulation distance built around a player.',
+    ),
+    _b(
+        "allow-outbound-script-debugging",
+        "false",
+        "Allow the script engine to open an outbound connection to a debugger.",
+    ),
+    _b(
+        "allow-inbound-script-debugging",
+        "false",
+        "Allow an inbound script-debugger connection (requires a debugger attached at startup).",
+    ),
+    _s(
+        "script-debugger-auto-attach",
+        "disabled",
+        "Script debugger auto-attach behaviour (e.g. disabled, connect).",
     ),
 )
 
@@ -271,11 +339,14 @@ def validate(key: str, value: str) -> ValidationIssue | None:
             return ValidationIssue(key, "error", f"must be one of: {allowed}")
         return None
 
-    if schema.type is PropertyType.INT:
+    if schema.type in (PropertyType.INT, PropertyType.FLOAT):
         try:
-            number = int(value.strip())
+            number: float = (
+                int(value.strip()) if schema.type is PropertyType.INT else float(value.strip())
+            )
         except ValueError:
-            return ValidationIssue(key, "error", "must be a whole number")
+            wanted = "a whole number" if schema.type is PropertyType.INT else "a number"
+            return ValidationIssue(key, "error", f"must be {wanted}")
         low, high = schema.minimum, schema.maximum
         if (low is not None and number < low) or (high is not None and number > high):
             return ValidationIssue(
@@ -288,7 +359,7 @@ def validate(key: str, value: str) -> ValidationIssue | None:
     return None  # STRING accepts any value
 
 
-def _range_text(low: int | None, high: int | None) -> str:
+def _range_text(low: float | None, high: float | None) -> str:
     if low is not None and high is not None:
         return f"{low} to {high}"
     if low is not None:

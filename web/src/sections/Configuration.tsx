@@ -56,11 +56,12 @@ function SettingRow({
         ))}
       </select>
     );
-  } else if (s?.type === "int") {
+  } else if (s?.type === "int" || s?.type === "float") {
     control = (
       <input
         id={id}
         type="number"
+        step={s.type === "float" ? "any" : 1}
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
@@ -93,12 +94,13 @@ function SettingRow({
           <span className="muted">
             {" "}
             Default: <code>{s.default === "" ? "(empty)" : s.default}</code>
-            {s.type === "int" && (s.minimum != null || s.maximum != null) && (
-              <>
-                {" "}
-                · range {s.minimum ?? "?"}–{s.maximum ?? "?"}
-              </>
-            )}
+            {(s.type === "int" || s.type === "float") &&
+              (s.minimum != null || s.maximum != null) && (
+                <>
+                  {" "}
+                  · range {s.minimum ?? "?"}–{s.maximum ?? "?"}
+                </>
+              )}
           </span>
         )}
         {error && <span className="cfg-error">{error}</span>}

@@ -73,6 +73,20 @@ const SETTINGS = [
     },
   },
   {
+    key: "player-position-acceptance-threshold",
+    value: "0.5",
+    recognised: true,
+    schema: {
+      key: "player-position-acceptance-threshold",
+      type: "float",
+      default: "0.5",
+      description: "Position divergence tolerance.",
+      members: null,
+      minimum: 0,
+      maximum: null,
+    },
+  },
+  {
     key: "level-name",
     value: "Bedrock level",
     recognised: true,
@@ -155,6 +169,12 @@ describe("Configuration section", () => {
     expect((screen.getByLabelText("view-distance") as HTMLInputElement).type).toBe(
       "number",
     );
+    // float -> number input that accepts decimals
+    const flt = screen.getByLabelText(
+      "player-position-acceptance-threshold",
+    ) as HTMLInputElement;
+    expect(flt.type).toBe("number");
+    expect(flt.step).toBe("any");
     expect(screen.getByText("World difficulty.")).toBeInTheDocument();
     expect(screen.getAllByText(/Default:/)[0]).toBeInTheDocument();
 
