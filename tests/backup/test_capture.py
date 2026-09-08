@@ -184,9 +184,7 @@ def test_corrupt_backup_excluded_from_restorable_but_still_listed(
 # -- 3.8 retention --------------------------------------------
 def test_prune_keeps_newest_and_removes_oldest_beyond_limit(tmp_settings: Settings) -> None:
     layout = _layout_with_state(tmp_settings)
-    made = [
-        _capture(layout, at=datetime(2026, 1, day, tzinfo=UTC)).archive for day in range(1, 6)
-    ]
+    made = [_capture(layout, at=datetime(2026, 1, day, tzinfo=UTC)).archive for day in range(1, 6)]
     store = BackupStore(layout.backup_dir)
 
     removed = store.prune(keep=2)

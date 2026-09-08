@@ -72,8 +72,12 @@ async def test_update_fields_after_success_failure_and_skip(make_supervisor) -> 
 
     fu.last_check_at = "2026-06-01T04:00:00"
     fu.last_result = SimpleNamespace(
-        status="success", at="2026-06-01T04:05:00", detail="ok",
-        from_version="1.0.0.1", to_version="2.0.0.1", step=None,
+        status="success",
+        at="2026-06-01T04:05:00",
+        detail="ok",
+        from_version="1.0.0.1",
+        to_version="2.0.0.1",
+        step=None,
     )
     u = t.snapshot().update
     assert u.last_check_at == "2026-06-01T04:00:00"

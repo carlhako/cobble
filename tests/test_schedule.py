@@ -106,13 +106,17 @@ async def test_next_run_tracks_wall_clock_across_a_dst_jump(tmp_path) -> None:
 
 async def test_disabled_schedule_reports_no_next_run(tmp_path) -> None:
     sch = Scheduler(
-        _settings(tmp_path, maintenance_time=""), _StubBackup(), _StubUpdate(_check()),
+        _settings(tmp_path, maintenance_time=""),
+        _StubBackup(),
+        _StubUpdate(_check()),
         clock=_Clock(datetime(2026, 6, 1, 3, 0)),
     )
     assert sch.next_run() is None
     sch2 = Scheduler(
         _settings(tmp_path, backup_enabled=False, update_enabled=False),
-        _StubBackup(), _StubUpdate(_check()), clock=_Clock(datetime(2026, 6, 1, 3, 0)),
+        _StubBackup(),
+        _StubUpdate(_check()),
+        clock=_Clock(datetime(2026, 6, 1, 3, 0)),
     )
     assert sch2.next_run() is None
 
@@ -149,7 +153,9 @@ async def test_window_skips_the_update_for_a_quarantined_version_but_still_backs
 async def test_backup_only_schedule_never_checks_for_updates(tmp_path) -> None:
     backup, update = _StubBackup(), _StubUpdate(_check(available="2.0.0.1"))
     sch = Scheduler(
-        _settings(tmp_path, update_enabled=False), backup, update,
+        _settings(tmp_path, update_enabled=False),
+        backup,
+        update,
         clock=_Clock(datetime(2026, 6, 1, 4, 1)),
     )
     await sch.run_now()
@@ -173,7 +179,9 @@ async def test_missed_window_is_skipped_until_the_next_day(tmp_path) -> None:
 
 async def test_should_run_only_within_the_jitter_grace_after_the_target(tmp_path) -> None:
     sch = Scheduler(
-        _settings(tmp_path), _StubBackup(), _StubUpdate(_check(up_to_date=True)),
+        _settings(tmp_path),
+        _StubBackup(),
+        _StubUpdate(_check(up_to_date=True)),
         clock=_Clock(datetime(2026, 6, 1, 4, 0)),
     )
     target = datetime(2026, 6, 1, 4, 0)
@@ -186,7 +194,9 @@ async def test_should_run_only_within_the_jitter_grace_after_the_target(tmp_path
 async def test_no_schedule_state_file_is_written(tmp_path) -> None:
     s = _settings(tmp_path)
     sch = Scheduler(
-        s, _StubBackup(), _StubUpdate(_check(up_to_date=True)),
+        s,
+        _StubBackup(),
+        _StubUpdate(_check(up_to_date=True)),
         clock=_Clock(datetime(2026, 6, 1, 4, 1)),
     )
     await sch.run_now()

@@ -28,7 +28,7 @@ _NEVER_READY = '#!/bin/sh\necho "[INFO] Starting Server"\nexec sleep 20\n'
 # ready, then dirties the world and exits inside the grace window
 _DIES_IN_GRACE = (
     '#!/bin/sh\necho "[INFO] Starting Server"\necho "[INFO] Server started."\n'
-    'echo dirty > worlds/W/marker\nsleep 0.4\nexit 1\n'
+    "echo dirty > worlds/W/marker\nsleep 0.4\nexit 1\n"
 )
 
 
@@ -47,9 +47,7 @@ def _installer(new_script: str):
     return _fake_install
 
 
-def _service(
-    sup: Supervisor, *, available: str = "2.0.0.1", grace: float = 1.0
-) -> UpdateService:
+def _service(sup: Supervisor, *, available: str = "2.0.0.1", grace: float = 1.0) -> UpdateService:
     sup._settings = sup._settings.model_copy(update={"update_grace_seconds": grace})
     layout = Layout.from_settings(sup._settings)
     backup = BackupService(sup._settings, layout, sup)
@@ -91,7 +89,10 @@ async def test_unreachable_vendor_is_surfaced_without_raising_or_updating(
     await sup.start()
     layout = Layout.from_settings(sup._settings)
     svc = UpdateService(
-        sup._settings, layout, sup, BackupService(sup._settings, layout, sup),
+        sup._settings,
+        layout,
+        sup,
+        BackupService(sup._settings, layout, sup),
         resolver=lambda _s: None,
     )
     check = await svc.check()
@@ -107,7 +108,10 @@ async def test_up_to_date_attempts_no_update(make_supervisor):
     await sup.start()
     layout = Layout.from_settings(sup._settings)
     svc = UpdateService(
-        sup._settings, layout, sup, BackupService(sup._settings, layout, sup),
+        sup._settings,
+        layout,
+        sup,
+        BackupService(sup._settings, layout, sup),
         resolver=lambda _s: ResolvedVersion("2.0.0.1", "http://v/x.zip"),
     )
     check = await svc.check()
@@ -167,7 +171,10 @@ async def test_unverifiable_pre_update_backup_abandons_update(make_supervisor, _
     )
     layout = Layout.from_settings(bad)
     svc = UpdateService(
-        bad, layout, sup, BackupService(bad, layout, sup),
+        bad,
+        layout,
+        sup,
+        BackupService(bad, layout, sup),
         resolver=lambda _s: ResolvedVersion("2.0.0.1", "http://v/x.zip"),
     )
     _use_installer(_patch_installer, _installer(_GOOD))
@@ -207,7 +214,10 @@ async def test_new_version_dies_in_grace_window_rolls_back_and_restores_world(
     layout = Layout.from_settings(settings)
     _seed_world(layout, b"pre-update")
     svc = UpdateService(
-        settings, layout, sup, BackupService(settings, layout, sup),
+        settings,
+        layout,
+        sup,
+        BackupService(settings, layout, sup),
         resolver=lambda _s: ResolvedVersion("2.0.0.1", "http://v/x.zip"),
     )
     _use_installer(_patch_installer, _installer(_DIES_IN_GRACE))

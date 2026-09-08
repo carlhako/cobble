@@ -203,8 +203,7 @@ class BackupService:
         entry = self.store.get(archive_name)
         if entry is None or not entry.restorable:
             raise BackupError(
-                f"cannot restore {archive_name}: "
-                f"{entry.reason if entry else 'not found'}"
+                f"cannot restore {archive_name}: {entry.reason if entry else 'not found'}"
             )
         await asyncio.to_thread(
             _extract_over_layout, self._layout.backup_dir / archive_name, self._layout
@@ -321,12 +320,7 @@ class BackupService:
 
         installed = self._sup.installed_version()
         recorded = entry.manifest.bedrock_version
-        if (
-            not confirm_old_version
-            and installed
-            and recorded
-            and is_newer(installed, recorded)
-        ):
+        if not confirm_old_version and installed and recorded and is_newer(installed, recorded):
             return RestoreOutcome(
                 False,
                 now,
@@ -371,9 +365,7 @@ class BackupService:
                 self._layout,
                 self._layout.backup_dir,
                 bedrock_version=self._sup.installed_version(),
-                shutdown_clean=(
-                    self._sup.last_shutdown.clean if self._sup.last_shutdown else None
-                ),
+                shutdown_clean=(self._sup.last_shutdown.clean if self._sup.last_shutdown else None),
                 now=self._clock(),
             )
             try:
@@ -415,9 +407,7 @@ class BackupService:
                 archive_name,
                 replaced.archive,
             )
-            return RestoreOutcome(
-                True, now, archive_name, replaced_capture=replaced.archive
-            )
+            return RestoreOutcome(True, now, archive_name, replaced_capture=replaced.archive)
 
     async def capture_pre_migration(self, version_dir: Path) -> BackupOutcome:
         """Capture a verified backup of a pre-separation (M1) installation whose

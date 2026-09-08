@@ -1,21 +1,21 @@
 """The update state machine (section 6, server-updates spec).
 
-    resolve vendor version
-      not newer / quarantined  -> record, stop
-    acquire (download + extract)          <- SERVER STILL RUNNING (task 6.2)
-      fails -> abort, server untouched
-    --- maintenance window (design.md D4) ---
-    clean stop
-      unclean -> abort, restart previous  (task 6.3)
-    verified pre-update backup
-      fails  -> abort, restart previous   (task 6.4)
-    activate new version
-    start, await readiness within readiness_timeout   (task 6.5)
-    grace window: an exit here is a failure            (task 6.6)
-      ready + survived grace -> SUCCESS, prune old version dirs (6.13)
-      otherwise -> ROLLBACK: previous version + pre-update world, start   (6.7, 6.8)
-        rolled back -> quarantine the failed version                      (6.10)
-        cannot start previous -> TERMINAL, cease automatic action         (6.9)
+resolve vendor version
+  not newer / quarantined  -> record, stop
+acquire (download + extract)          <- SERVER STILL RUNNING (task 6.2)
+  fails -> abort, server untouched
+--- maintenance window (design.md D4) ---
+clean stop
+  unclean -> abort, restart previous  (task 6.3)
+verified pre-update backup
+  fails  -> abort, restart previous   (task 6.4)
+activate new version
+start, await readiness within readiness_timeout   (task 6.5)
+grace window: an exit here is a failure            (task 6.6)
+  ready + survived grace -> SUCCESS, prune old version dirs (6.13)
+  otherwise -> ROLLBACK: previous version + pre-update world, start   (6.7, 6.8)
+    rolled back -> quarantine the failed version                      (6.10)
+    cannot start previous -> TERMINAL, cease automatic action         (6.9)
 """
 
 from __future__ import annotations
@@ -326,9 +326,7 @@ class UpdateService:
                     to_version=new,
                 )
 
-            return await self._rollback(
-                handle, previous, new, pre_archive, failure, failing_step
-            )
+            return await self._rollback(handle, previous, new, pre_archive, failure, failing_step)
 
     # -- rollback (tasks 6.7-6.9) ------------------------------
     async def _rollback(

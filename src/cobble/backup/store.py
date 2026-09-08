@@ -76,9 +76,7 @@ class BackupStore:
             archive = sidecar.with_name(sidecar.name.removesuffix(".json"))
             manifest = Manifest.try_read(sidecar)
             if manifest is None:
-                entries.append(
-                    BackupEntry(archive, sidecar, None, False, "manifest unreadable")
-                )
+                entries.append(BackupEntry(archive, sidecar, None, False, "manifest unreadable"))
                 continue
             if not archive.is_file():
                 entries.append(

@@ -45,9 +45,7 @@ def build_backups_router(runtime: Runtime) -> APIRouter:
         archive: str, confirm_old_version: bool = Body(default=False, embed=True)
     ) -> dict:
         try:
-            outcome = await runtime.backup.restore(
-                archive, confirm_old_version=confirm_old_version
-            )
+            outcome = await runtime.backup.restore(archive, confirm_old_version=confirm_old_version)
         except BackupConflictError as exc:
             raise conflict(exc.code, str(exc)) from exc
         except (MaintenanceConflictError, SupervisorError) as exc:
