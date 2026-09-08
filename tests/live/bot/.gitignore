@@ -1,0 +1,6 @@
+node_modules/
+# Never commit auth material. The bot caches Microsoft tokens outside the repo by
+# default (see bot.js BOT_AUTH_DIR); this is a belt-and-braces guard in case a
+# run is pointed back into the tree.
+.auth/
+*.log

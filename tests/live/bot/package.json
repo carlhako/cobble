@@ -1,0 +1,13 @@
+{
+  "name": "cobble-live-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Headless authenticated Minecraft Bedrock client used by cobble's live verification harness to produce real player connect/spawn/disconnect events against a running server.",
+  "type": "commonjs",
+  "scripts": {
+    "postinstall": "node ensure-raknet.js"
+  },
+  "dependencies": {
+    "bedrock-protocol": "3.59.0"
+  }
+}
