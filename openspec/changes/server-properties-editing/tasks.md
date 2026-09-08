@@ -50,9 +50,9 @@
 
 ## 8. Verification
 
-- [ ] 8.1 Exercise the full loop end to end against a running server: save a setting, observe it pending, restart, observe it in effect and no longer pending; verify with a setting whose effect is visible in BDS output or status
-- [ ] 8.2 Verify a deferred change is applied by a start cobble did not initiate — a crash restart or an update — and that the pending state clears as a result (design.md D6)
-- [ ] 8.3 Verify a hand-edited `server.properties` containing comments and operator-added keys survives a save from the interface with only the changed line altered, by diffing the file before and after
-- [ ] 8.4 Verify the level picker against a server with two worlds: switching between them loads each world, and both directories remain on disk throughout
+- [x] 8.1 Exercise the full loop end to end against a running server: save a setting, observe it pending, restart, observe it in effect and no longer pending; verify with a setting whose effect is visible in BDS output or status
+- [x] 8.2 Verify a deferred change is applied by a start cobble did not initiate — a crash restart or an update — and that the pending state clears as a result (design.md D6)
+- [x] 8.3 Verify a hand-edited `server.properties` containing comments and operator-added keys survives a save from the interface with only the changed line altered, by diffing the file before and after
+- [x] 8.4 Verify the level picker against a server with two worlds: switching between them loads each world, and both directories remain on disk throughout
 - [ ] 8.5 Run the full check suite — `ruff check . && ruff format --check .`, `pytest`, `npm --prefix web run lint`, `npm --prefix web run test`, `npm --prefix web run build` — and verify all pass
 - [x] 8.6 Update `README.md` to document configuration editing and the restart-to-apply behavior; verify the described behavior matches what ships
