@@ -89,6 +89,62 @@ export interface RestoreResult {
   error: string | null;
 }
 
+export type PropertyType = "bool" | "int" | "enum" | "string";
+
+export interface PropertySchema {
+  key: string;
+  type: PropertyType;
+  default: string;
+  description: string;
+  members: string[] | null;
+  minimum: number | null;
+  maximum: number | null;
+}
+
+export interface ConfigSetting {
+  key: string;
+  value: string;
+  recognised: boolean;
+  schema: PropertySchema | null;
+}
+
+export interface PendingChange {
+  key: string;
+  saved: string | null;
+  in_effect: string | null;
+}
+
+export interface ValidationIssue {
+  key: string;
+  severity: "error" | "warning";
+  message: string;
+}
+
+export interface ConfigRead {
+  settings: ConfigSetting[];
+  pending: PendingChange[];
+}
+
+export interface ConfigWriteResult {
+  ok: boolean;
+  errors: ValidationIssue[];
+  warnings: ValidationIssue[];
+  changed: string[];
+  notes: string[];
+  pending: PendingChange[];
+}
+
+export interface WorldInfo {
+  name: string;
+  is_current: boolean;
+}
+
+export interface WorldsView {
+  worlds: WorldInfo[];
+  current: string;
+  current_present: boolean;
+}
+
 export const api = {
   start: () => request<StatusPayload>("POST", "/server/start"),
   stop: () => request<StatusPayload>("POST", "/server/stop"),
@@ -115,6 +171,11 @@ export const api = {
     request<RestoreResult>("POST", `/backups/${encodeURIComponent(archive)}/restore`, {
       confirm_old_version: confirmOldVersion,
     }),
+
+  configRead: () => request<ConfigRead>("GET", "/config"),
+  configWrite: (changes: Record<string, string>) =>
+    request<ConfigWriteResult>("POST", "/config", { changes }),
+  configWorlds: () => request<WorldsView>("GET", "/config/worlds"),
 };
 
 export type BootstrapState = "skipped" | "not_needed" | "running" | "done" | "failed";
@@ -185,4 +246,5 @@ export interface StatusPayload {
   version_info: VersionInfo | null;
   update: UpdateInfo | null;
   backup: BackupInfo | null;
+  config: { pending: boolean; pending_count: number } | null;
 }

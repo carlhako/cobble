@@ -20,6 +20,7 @@ __all__ = ["build_api_router"]
 
 def build_api_router(runtime: Runtime) -> APIRouter:
     from cobble.api.backups import build_backups_router
+    from cobble.api.config import build_config_router
     from cobble.api.console import build_console_router
     from cobble.api.lifecycle import build_lifecycle_router
     from cobble.api.status import build_status_router
@@ -31,4 +32,5 @@ def build_api_router(runtime: Runtime) -> APIRouter:
     router.include_router(build_status_router(runtime))
     router.include_router(build_updates_router(runtime))
     router.include_router(build_backups_router(runtime))
+    router.include_router(build_config_router(runtime))
     return router

@@ -9,10 +9,11 @@ typed events, and exposes start/stop/restart plus live status. The web interface
 compiled to static assets at build time and served by the same process — no Node
 runtime in the container.
 
-This repository is milestone **M1 (foundation)**: process supervision, event
-parsing, the console, status, the HTTP interface, the web shell, and the install
-path. Auto-updates, backups, configuration editing, and the player roster are later
-milestones that build on what is here.
+This repository covers **M1 (foundation)** — process supervision, event parsing,
+the console, status, the HTTP interface, the web shell, the install path — plus
+**M2** (auto-updates and backups) and **M3** (editing `server.properties` from the
+browser). The player roster and gamerule editing are later milestones that build
+on what is here.
 
 ## Container prerequisites
 
@@ -100,6 +101,33 @@ Cobble runs with no config file present.
 Set the container timezone explicitly (`timedatectl set-timezone …`) — the nightly
 window runs in local wall-clock time. The resolved next-run time is shown in the
 web interface so a misconfigured zone is visible.
+
+### Editing the Bedrock server configuration
+
+The **Configuration** section of the web interface edits `server.properties`
+directly. Recognised keys are shown as typed inputs — a checkbox, a bounded
+number, a dropdown — with their documented default and a short description; keys
+cobble does not recognise (an operator-added key, one a newer BDS introduced)
+appear as plain editable text and are never dropped. `level-name` is presented as
+a picker over the worlds under `data/worlds/`, with "create a new world" a
+separate, explicitly confirmed action.
+
+Saving is always safe and never disturbs a running server: **BDS reads
+`server.properties` only when it starts.** After a save, cobble compares the file
+on disk against a snapshot taken when the running server was last started and
+reports exactly which settings differ. Applying them is a separate act — restart
+now from the pending-changes panel, or defer it. A deferred change is not inert:
+it takes effect at the **next start for any reason**, including an automatic crash
+restart or the nightly update. The pending state is shown whenever the section is
+opened, not only right after a save.
+
+Writes change only the lines they touch — comments, blank lines, key order, and
+unrecognised keys are preserved, so a hand-edited or vendor-commented file
+survives a save intact. Values are validated: a wrong type (a word in a number
+field, a value outside an enum) is rejected with a per-setting reason and nothing
+is written; a value of the right type that is merely outside cobble's recommended
+range is saved with a warning. Configuration writes are refused while an update,
+backup, or restore is in progress; reads stay available.
 
 ### Reverting to a pre-M2 (M1) cobble release
 

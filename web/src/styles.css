@@ -400,3 +400,86 @@ h2 {
   font-family: var(--mono);
   font-size: 0.85rem;
 }
+
+/* -- configuration -- */
+.cfg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  margin-top: 0.5rem;
+}
+.cfg-row {
+  display: grid;
+  grid-template-columns: minmax(12rem, 18rem) 1fr;
+  grid-template-areas: "label control" ". meta";
+  gap: 0.25rem 1rem;
+  align-items: baseline;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.cfg-label {
+  grid-area: label;
+  font-family: var(--mono);
+  font-size: 0.88rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.cfg-control {
+  grid-area: control;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.cfg-control input[type="text"],
+.cfg-control input[type="number"],
+.cfg-control select {
+  font: inherit;
+  padding: 0.35rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  min-width: 12rem;
+}
+.cfg-meta {
+  grid-area: meta;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.82rem;
+}
+.cfg-row.has-error .cfg-control input,
+.cfg-row.has-error .cfg-control select {
+  border-color: var(--warn);
+}
+.cfg-error {
+  color: var(--warn);
+}
+.cfg-warn {
+  color: var(--warn);
+  opacity: 0.9;
+}
+.cfg-new-world {
+  margin-top: 0.5rem;
+}
+.cfg-pending {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.6rem;
+  font-size: 0.88rem;
+}
+.cfg-pending th,
+.cfg-pending td {
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+}
+@media (max-width: 720px) {
+  .cfg-row {
+    grid-template-columns: 1fr;
+    grid-template-areas: "label" "control" "meta";
+  }
+}

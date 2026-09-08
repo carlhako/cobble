@@ -28,6 +28,7 @@ from cobble.acquisition.migration import LayoutMigration, MigrationError
 from cobble.acquisition.preflight import run_preflight
 from cobble.acquisition.version_source import try_resolve_current_version
 from cobble.backup.service import BackupService
+from cobble.config.service import ConfigService
 from cobble.console.console import Console
 from cobble.events.bus import EventBus
 from cobble.events.parser import parse_line
@@ -64,12 +65,22 @@ class Runtime:
         self.scheduler = Scheduler(settings, self.backup, self.update)
         self.migration = LayoutMigration(settings, self.layout, self.supervisor, self.backup)
         self.console = Console(self.supervisor)
+        # A successful configuration save pushes the new pending state to clients
+        # (server-status spec, task 5.2); start/restart pushes happen via the
+        # tracker's run-state subscription.
+        self.config = ConfigService(
+            settings,
+            self.layout,
+            self.supervisor,
+            on_change=lambda: self.status.notify(),
+        )
         self.status = StatusTracker(
             self.supervisor,
             bootstrap=self.bootstrap,
             update=self.update,
             backup=self.backup,
             scheduler=self.scheduler,
+            config=self.config,
         )
         self.bus.subscribe(self.status.on_event)
         self._app: FastAPI | None = None

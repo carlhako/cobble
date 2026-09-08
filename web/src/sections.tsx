@@ -2,6 +2,7 @@ import type { ReactElement } from "react";
 import { Dashboard } from "./sections/Dashboard";
 import { Console } from "./sections/Console";
 import { UpdatesBackups } from "./sections/UpdatesBackups";
+import { Configuration } from "./sections/Configuration";
 
 export interface Section {
   path: string;
@@ -16,4 +17,5 @@ export const sections: Section[] = [
   { path: "/", label: "Dashboard", element: <Dashboard /> },
   { path: "/console", label: "Console", element: <Console /> },
   { path: "/updates", label: "Updates & Backups", element: <UpdatesBackups /> },
+  { path: "/configuration", label: "Configuration", element: <Configuration /> },
 ];

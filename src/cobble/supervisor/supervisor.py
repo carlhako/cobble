@@ -18,6 +18,7 @@ import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
 from cobble.acquisition.layout import Layout
 from cobble.console.buffer import ConsoleBuffer
@@ -47,6 +48,31 @@ __all__ = [
 ]
 
 log = get_logger("supervisor")
+
+# Run states in which no server process is alive, so no configuration is "in
+# effect" (server-config spec: "The server is not running → no configuration is
+# recorded as being in effect").
+_CONFIG_SNAPSHOT_CLEAR_STATES = frozenset(
+    {
+        RunState.STOPPED,
+        RunState.CRASHED,
+        RunState.FAILED,
+        RunState.RECOVERY_ABANDONED,
+    }
+)
+
+
+def _read_effective_config(path: Path) -> dict[str, str]:
+    """The last-assignment-wins key/value map of ``server.properties`` at ``path``,
+    or an empty map if it is absent or unreadable. Imported lazily to avoid an
+    import cycle with :mod:`cobble.config`."""
+    from cobble.config.properties import PropertiesDocument
+
+    try:
+        return PropertiesDocument.load(path).effective()
+    except OSError:
+        return {}
+
 
 LineSink = Callable[[str], None]
 StateListener = Callable[[RunState, RunState], None]
@@ -157,6 +183,12 @@ class Supervisor:
         self._last_crash: CrashInfo | None = None
         self._crash_times: list[float] = []
 
+        # The effective server.properties map captured at the moment BDS was
+        # spawned, held for the life of that process (server-config spec D5).
+        # Pending-versus-live is derived by comparing the file on disk against
+        # this, not tracked with a flag that can desynchronise.
+        self._config_snapshot: dict[str, str] | None = None
+
         # Maintenance: a multi-step operation (update / restore / backup) that
         # owns the server's lifecycle. Orthogonal to RunState (design.md D8).
         self._maintenance: str | None = None
@@ -169,6 +201,7 @@ class Supervisor:
 
         self._state_waiters: list[tuple[frozenset[RunState], asyncio.Future[RunState]]] = []
         self._sm.subscribe(self._resolve_state_waiters)
+        self._sm.subscribe(self._forget_config_snapshot_on_exit)
 
     def _resolve_state_waiters(self, _frm: RunState, to: RunState) -> None:
         still: list[tuple[frozenset[RunState], asyncio.Future[RunState]]] = []
@@ -178,6 +211,10 @@ class Supervisor:
             elif not fut.done():
                 still.append((targets, fut))
         self._state_waiters = still
+
+    def _forget_config_snapshot_on_exit(self, _frm: RunState, to: RunState) -> None:
+        if to in _CONFIG_SNAPSHOT_CLEAR_STATES:
+            self._config_snapshot = None
 
     async def wait_for_state(self, *targets: RunState) -> RunState:
         """Await the next transition into one of ``targets`` (or return now if
@@ -215,6 +252,14 @@ class Supervisor:
     @property
     def last_crash(self) -> CrashInfo | None:
         return self._last_crash
+
+    @property
+    def config_snapshot(self) -> dict[str, str] | None:
+        """The effective ``server.properties`` map the running server was started
+        with, or ``None`` when the server is not running (server-config spec)."""
+        if self._sm.state == RunState.RUNNING:
+            return self._config_snapshot
+        return None
 
     @property
     def maintenance(self) -> str | None:
@@ -329,9 +374,7 @@ class Supervisor:
         to a correct ``MaintenanceInProgressError`` on the recheck below.
         """
         if self._maintenance is not None:
-            raise MaintenanceInProgressError(
-                f"a {self._maintenance} operation is in progress"
-            )
+            raise MaintenanceInProgressError(f"a {self._maintenance} operation is in progress")
 
     # -- lifecycle: start ------------------------------------------
     async def start(self) -> None:
@@ -363,6 +406,7 @@ class Supervisor:
         # to its working directory (design.md D2). That directory is data/: real
         # mutable state, plus symlinks to the active version's payload.
         self._layout.ensure_payload_symlinks()
+        self._config_snapshot = _read_effective_config(self._layout.data_dir / "server.properties")
         run_binary = self._layout.run_binary
         # If prior output is retained, mark this process boundary so a restart is
         # distinguishable within the console history (server-console spec).

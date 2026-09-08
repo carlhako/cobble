@@ -92,6 +92,12 @@ class BackupView:
 
 
 @dataclass(frozen=True)
+class ConfigView:
+    pending: bool
+    pending_count: int
+
+
+@dataclass(frozen=True)
 class StatusSnapshot:
     run_state: RunState
     version: str | None
@@ -106,6 +112,7 @@ class StatusSnapshot:
     version_info: VersionView | None = None
     update: UpdateView | None = None
     backup: BackupView | None = None
+    config: ConfigView | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -168,6 +175,14 @@ class StatusSnapshot:
                     "count": self.backup.count,
                 }
             ),
+            "config": (
+                None
+                if self.config is None
+                else {
+                    "pending": self.config.pending,
+                    "pending_count": self.config.pending_count,
+                }
+            ),
         }
 
 
@@ -186,6 +201,7 @@ class StatusTracker:
         update=None,
         backup=None,
         scheduler=None,
+        config=None,
     ) -> None:
         self._sup = supervisor
         self._clock = clock
@@ -193,6 +209,7 @@ class StatusTracker:
         self._update = update  # UpdateService or None
         self._backup = backup  # BackupService or None
         self._scheduler = scheduler  # Scheduler or None
+        self._config = config  # ConfigService or None
         self._online: dict[str, str] = {}  # xuid -> gamertag
         self._incomplete = False
         self._subs: set[_Sub] = set()
@@ -281,7 +298,18 @@ class StatusTracker:
             version_info=self._version_view(),
             update=self._update_view(),
             backup=self._backup_view(),
+            config=self._config_view(),
         )
+
+    def _config_view(self) -> ConfigView | None:
+        if self._config is None:
+            return None
+        try:
+            changes = self._config.pending()
+        except Exception:
+            log.exception("config pending comparison failed; reporting none")
+            changes = []
+        return ConfigView(pending=bool(changes), pending_count=len(changes))
 
     def _next_scheduled(self) -> str | None:
         if self._scheduler is None:
@@ -322,9 +350,7 @@ class StatusTracker:
                 }
             ),
             next_scheduled_at=self._next_scheduled(),
-            skipping=(
-                available if available and self._update.is_skipping(available) else None
-            ),
+            skipping=(available if available and self._update.is_skipping(available) else None),
             terminal=self._update.terminal,
         )
 
