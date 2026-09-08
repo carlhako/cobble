@@ -11,9 +11,9 @@ runtime in the container.
 
 This repository covers **M1 (foundation)** — process supervision, event parsing,
 the console, status, the HTTP interface, the web shell, the install path — plus
-**M2** (auto-updates and backups) and **M3** (editing `server.properties` from the
-browser). The player roster and gamerule editing are later milestones that build
-on what is here.
+**M2** (auto-updates and backups), **M3** (editing `server.properties` from the
+browser), **M4** (the durable player roster) and **M5** (gamerule editing, with
+per-world records and preferred defaults).
 
 ## Container prerequisites
 
@@ -160,6 +160,54 @@ shows the date from which history has been recorded so that an absence of early
 data reads as "never collected", not "lost". `cobble.db` is inside the backup set
 by virtue of living in `state_dir`, and a backup checkpoints it before capture so
 the restored copy opens cleanly.
+
+### Gamerules
+
+The **Gamerules** section lists every gamerule the running server reports, typed
+— a checkbox for a boolean, a bounded number for an integer, a dropdown for an
+enumerated rule — with a short description. A rule cobble has no type information
+for (one a newer BDS introduced) is shown as plain editable text and is never
+hidden.
+
+**A change applies immediately.** BDS accepts `gamerule` against a running server
+with no restart and no world reload. Cobble sends the change and then reads the
+whole set back: the value you see afterwards is the value the server reports, not
+the one you submitted. This is deliberate — `sendCommandFeedback` is itself a
+gamerule, and with it off a successful write produces no acknowledgement at all,
+so cobble never relies on one. A value of the wrong type or outside a rule's
+range is refused with a per-rule reason and nothing is sent; a value the server
+itself rejects is surfaced verbatim. None of this traffic appears in the operator
+console.
+
+**Cobble keeps a per-world record.** Gamerules live in the world, not in
+`server.properties`, so the record is keyed by `level-name` and stored in
+`<state_dir>/cobble.db`. It is sampled when the server becomes ready and again
+just before cobble stops it. While the server is stopped the section shows this
+record, marked as recorded with the time it was taken; a world cobble has never
+run is reported as **not yet read** rather than guessing. A change made while the
+server is stopped is queued as that world's intended value and applied at the
+next start.
+
+**Drift is adopted, not reverted.** Only an operator with in-game rights can
+change a gamerule outside cobble, so if the live set differs from the record and
+cobble did not cause it, the change is treated as intended: cobble records the
+new value and reports that it did, naming each rule. It never silently puts a
+rule back. **The one exception is a restore** — restoring a backup reverts the
+world's gamerules along with everything else, which by value alone is
+indistinguishable from an in-game change. Cobble knows it performed the restore,
+so on the next start it re-applies the record instead of adopting it, and reports
+that too. Every adoption, repair, or defaults application is shown in the section
+with the rules and values involved and an acknowledge control that dismisses it.
+
+**Preferred defaults** are a set of values you mark as your preference, applied
+once to any world cobble sees for the first time — the tier that carries a
+preference into a world that did not exist when per-world memory was set.
+Creating a world otherwise resets every rule to the vendor default. Defaults are
+edited separately from the active world's values and never touch a world cobble
+already has a record of.
+
+Gamerule writes are refused while an update, backup, or restore is in progress;
+reads stay available.
 
 ### Reverting to a pre-M2 (M1) cobble release
 

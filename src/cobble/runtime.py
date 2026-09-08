@@ -32,6 +32,10 @@ from cobble.config.service import ConfigService
 from cobble.console.console import Console
 from cobble.events.bus import EventBus
 from cobble.events.parser import parse_line
+from cobble.gamerules.manager import GameruleManager
+from cobble.gamerules.service import GameruleService
+from cobble.gamerules.storage import GameruleStorageError
+from cobble.gamerules.storage import open_store as open_gamerule_store
 from cobble.logging import get_logger
 from cobble.players.service import PlayerHistoryService
 from cobble.players.storage import PlayerHistoryError, PlayerStore, open_store
@@ -76,6 +80,29 @@ class Runtime:
             self.supervisor,
             on_change=lambda: self.status.notify(),
         )
+
+        # Gamerule editing (M5). Shares ``cobble.db`` with player history; a
+        # database that cannot be opened disables gamerule editing for the run
+        # (the API returns 503) and the server still starts.
+        self.gamerule_store = None
+        self.gamerules: GameruleManager | None = None
+        try:
+            self.gamerule_store = open_gamerule_store(settings.player_db_file)
+        except GameruleStorageError:
+            log.exception("gamerule storage unavailable; gamerule editing disabled this run")
+        if self.gamerule_store is not None:
+            self.gamerules = GameruleManager(
+                GameruleService(self.console),
+                self.gamerule_store,
+                self.supervisor,
+                world_name=lambda: self.config.worlds().current,
+                on_report=lambda: self.status.notify(),
+            )
+            self.bus.subscribe(self.gamerules.on_event)
+            # A completed restore names the world so the next readiness repairs
+            # its gamerules rather than adopting the reverted set (design.md D6).
+            self.backup.set_on_restored(self.gamerules.mark_restored)
+
         self.status = StatusTracker(
             self.supervisor,
             bootstrap=self.bootstrap,
@@ -83,6 +110,7 @@ class Runtime:
             backup=self.backup,
             scheduler=self.scheduler,
             config=self.config,
+            gamerules=self.gamerules,
         )
         self.bus.subscribe(self.status.on_event)
 
@@ -204,6 +232,8 @@ class Runtime:
                 await self._bootstrap_task
         await self.scheduler.stop()
         await self.supervisor.aclose()
+        if self.gamerules is not None:
+            await self.gamerules.aclose()
         if self.player_history is not None:
             # After aclose(): the supervisor's clean stop has already fired the
             # pre-stop hook that closes any still-open session.

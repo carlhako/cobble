@@ -12,6 +12,7 @@ import errno
 import os
 import shutil
 import tarfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -149,15 +150,41 @@ class BackupService:
         supervisor: Supervisor,
         *,
         clock=lambda: datetime.now(UTC),
+        on_restored: Callable[[str], None] | None = None,
     ) -> None:
         self._settings = settings
         self._layout = layout
         self._sup = supervisor
         self._clock = clock
+        # Called after a completed restore with the restored world's level-name,
+        # so the next readiness repairs its gamerules rather than adopting the
+        # reverted set (server-gamerules spec; design.md D6).
+        self._on_restored = on_restored
         self.store = BackupStore(layout.backup_dir)
         self._busy: str | None = None
         self._health: str | None = None
         self._last: BackupOutcome | None = None
+
+    def set_on_restored(self, callback: Callable[[str], None] | None) -> None:
+        """Register (or replace) the restored-world callback after construction —
+        the runtime wires this once the gamerule manager exists."""
+        self._on_restored = callback
+
+    def _note_restored_world(self) -> None:
+        if self._on_restored is None:
+            return
+        try:
+            from cobble.config.properties import PropertiesDocument
+
+            props = self._layout.data_dir / "server.properties"
+            name = ""
+            if props.is_file():
+                name = (
+                    PropertiesDocument.load(props).effective().get("level-name") or ""
+                ).strip()
+            self._on_restored(name or "Bedrock level")
+        except Exception:
+            log.exception("could not record the restored world for gamerules")
 
     # -- observation ---------------------------------------------
     @property
@@ -209,6 +236,7 @@ class BackupService:
             _extract_over_layout, self._layout.backup_dir / archive_name, self._layout
         )
         self._layout.ensure_payload_symlinks()
+        self._note_restored_world()
 
     async def snapshot_now(self, reason: str) -> BackupOutcome:
         """Capture immediately, without touching the server's run state.
@@ -401,6 +429,7 @@ class BackupService:
 
             self._layout.ensure_payload_symlinks()
             await asyncio.to_thread(self.store.prune, self._settings.backup_retention)
+            self._note_restored_world()
             await self._restore_run_state(handle, was_running)
             log.info(
                 "restore complete: %s (replaced state saved as %s)",

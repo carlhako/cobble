@@ -183,6 +183,65 @@ export interface WorldsView {
   current_present: boolean;
 }
 
+// --- Gamerules (M5) -------------------------------------------------
+export type GameruleType = "bool" | "int" | "enum" | null;
+export type GameruleValue = boolean | number | string;
+
+export interface GameruleRow {
+  name: string;
+  raw: string;
+  value: GameruleValue;
+  type: GameruleType;
+  recognised: boolean;
+  minimum?: number | null;
+  maximum?: number | null;
+  members?: string[];
+  description?: string;
+  default?: GameruleValue;
+}
+
+export type GameruleLiveness = "live" | "recorded" | "unread";
+export type GameruleReportKind = "adoption" | "repair" | "defaults";
+
+export interface GameruleReport {
+  level_name: string;
+  kind: GameruleReportKind;
+  created_at: string;
+  rules: Record<string, GameruleValue>;
+}
+
+export interface GameruleView {
+  level_name: string;
+  liveness: GameruleLiveness;
+  sampled_at: string | null;
+  rules: GameruleRow[];
+  report: GameruleReport | null;
+}
+
+export interface GameruleWriteResult {
+  queued: boolean;
+  level_name: string;
+  rule?: GameruleRow | null;
+  rules?: GameruleRow[];
+  pending?: Record<string, GameruleValue>;
+  detail?: string;
+}
+
+export interface GameruleCatalogueEntry {
+  name: string;
+  type: Exclude<GameruleType, null>;
+  default: GameruleValue;
+  description: string;
+  minimum: number | null;
+  maximum: number | null;
+  members: string[];
+}
+
+export interface GameruleDefaults {
+  defaults: Record<string, GameruleValue>;
+  catalogue: GameruleCatalogueEntry[];
+}
+
 export const api = {
   start: () => request<StatusPayload>("POST", "/server/start"),
   stop: () => request<StatusPayload>("POST", "/server/stop"),
@@ -218,6 +277,19 @@ export const api = {
   configWrite: (changes: Record<string, string>) =>
     request<ConfigWriteResult>("POST", "/config", { changes }),
   configWorlds: () => request<WorldsView>("GET", "/config/worlds"),
+
+  gamerulesRead: () => request<GameruleView>("GET", "/gamerules"),
+  gamerulesWrite: (name: string, value: GameruleValue) =>
+    request<GameruleWriteResult>("POST", "/gamerules", { name, value }),
+  gamerulesDefaults: () => request<GameruleDefaults>("GET", "/gamerules/defaults"),
+  gamerulesSetDefault: (name: string, value: GameruleValue) =>
+    request<GameruleDefaults>("PUT", "/gamerules/defaults", { name, value }),
+  gamerulesClearDefault: (name: string) =>
+    request<GameruleDefaults>(
+      "DELETE",
+      `/gamerules/defaults/${encodeURIComponent(name)}`,
+    ),
+  gamerulesAcknowledge: () => request<{ ok: boolean }>("POST", "/gamerules/acknowledge"),
 };
 
 export type BootstrapState = "skipped" | "not_needed" | "running" | "done" | "failed";
@@ -289,4 +361,10 @@ export interface StatusPayload {
   update: UpdateInfo | null;
   backup: BackupInfo | null;
   config: { pending: boolean; pending_count: number } | null;
+  gamerules: {
+    active_world: string;
+    liveness: GameruleLiveness;
+    last_read_at: string | null;
+    report: GameruleReport | null;
+  } | null;
 }

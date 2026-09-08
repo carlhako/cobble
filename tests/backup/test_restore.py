@@ -150,3 +150,43 @@ async def test_restore_that_fails_partway_keeps_the_replaced_state_recoverable(
     recovered = await svc.restore(outcome.replaced_capture)
     assert recovered.ok is True
     assert (layout.data_dir / "worlds" / "W" / "marker").read_bytes() == b"current-state"
+
+
+async def test_completed_restore_notifies_the_restored_world_name(make_supervisor) -> None:
+    # 4.3 (gamerule-editing-and-defaults): a completed restore names the world it
+    # replaced so the next readiness repairs rather than adopts.
+    sup: Supervisor = make_supervisor(shutdown_timeout=5.0)
+    layout = Layout.from_settings(sup._settings)
+    restored: list[str] = []
+    svc = BackupService(
+        sup._settings, layout, sup, on_restored=restored.append
+    )
+    _seed_world(layout, b"v1", "level-name=Family World\n")
+    captured = await svc.capture(reason="manual")
+    _seed_world(layout, b"v2", "level-name=Family World\n")
+
+    outcome = await svc.restore(captured.archive)
+    assert outcome.ok is True
+    assert restored == ["Family World"]
+
+
+async def test_failed_restore_does_not_notify(make_supervisor) -> None:
+    # 4.3: a restore that is refused writes no marker.
+    sup: Supervisor = make_supervisor(shutdown_timeout=1.0)
+    layout = Layout.from_settings(sup._settings)
+    restored: list[str] = []
+    svc = BackupService(sup._settings, layout, sup, on_restored=restored.append)
+    _seed_world(layout, b"original", "level-name=W\n")
+    captured = await svc.capture(reason="manual")
+    _seed_world(layout, b"changed", "level-name=W\n")
+
+    os.environ["FAKE_BDS_IGNORE_STOP"] = "1"
+    try:
+        await sup.start()
+        outcome = await svc.restore(captured.archive)
+    finally:
+        os.environ.pop("FAKE_BDS_IGNORE_STOP", None)
+
+    assert outcome.ok is False
+    assert restored == []
+    await sup.stop()

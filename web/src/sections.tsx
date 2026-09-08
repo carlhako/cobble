@@ -3,6 +3,7 @@ import { Dashboard } from "./sections/Dashboard";
 import { Console } from "./sections/Console";
 import { UpdatesBackups } from "./sections/UpdatesBackups";
 import { Configuration } from "./sections/Configuration";
+import { Gamerules } from "./sections/Gamerules";
 import { Players } from "./sections/Players";
 
 export interface Section {
@@ -19,5 +20,6 @@ export const sections: Section[] = [
   { path: "/console", label: "Console", element: <Console /> },
   { path: "/updates", label: "Updates & Backups", element: <UpdatesBackups /> },
   { path: "/configuration", label: "Configuration", element: <Configuration /> },
+  { path: "/gamerules", label: "Gamerules", element: <Gamerules /> },
   { path: "/players", label: "Players", element: <Players /> },
 ];

@@ -113,6 +113,7 @@ class StatusSnapshot:
     update: UpdateView | None = None
     backup: BackupView | None = None
     config: ConfigView | None = None
+    gamerules: dict | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -183,6 +184,7 @@ class StatusSnapshot:
                     "pending_count": self.config.pending_count,
                 }
             ),
+            "gamerules": self.gamerules,
         }
 
 
@@ -202,6 +204,7 @@ class StatusTracker:
         backup=None,
         scheduler=None,
         config=None,
+        gamerules=None,
     ) -> None:
         self._sup = supervisor
         self._clock = clock
@@ -210,6 +213,7 @@ class StatusTracker:
         self._backup = backup  # BackupService or None
         self._scheduler = scheduler  # Scheduler or None
         self._config = config  # ConfigService or None
+        self._gamerules = gamerules  # GameruleManager or None
         self._online: dict[str, str] = {}  # xuid -> gamertag
         self._incomplete = False
         self._subs: set[_Sub] = set()
@@ -299,7 +303,17 @@ class StatusTracker:
             update=self._update_view(),
             backup=self._backup_view(),
             config=self._config_view(),
+            gamerules=self._gamerules_block(),
         )
+
+    def _gamerules_block(self) -> dict | None:
+        if self._gamerules is None:
+            return None
+        try:
+            return self._gamerules.status_block()
+        except Exception:
+            log.exception("gamerule status block failed; reporting none")
+            return None
 
     def _config_view(self) -> ConfigView | None:
         if self._config is None:
