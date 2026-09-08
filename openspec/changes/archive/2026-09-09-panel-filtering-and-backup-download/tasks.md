@@ -17,15 +17,15 @@
 ## 4. Filter on Configuration
 
 - [x] 4.1 In `web/src/sections/Configuration.tsx`, add filter `useState` and render `FilterBar` above the settings panel. Filter `read.settings` (including the `level-name` row) with `matchesFilter` over key and `schema.description`. Keep `PendingPanel`, the maintenance banner, notes, and the "Saved." strip outside the filter. Show a "nothing matches" message inside the panel when the filtered list is empty and the query is non-empty.
-- [ ] 4.2 Verify manually against a live server: typing narrows the list as you type, clearing restores it, a pending-change banner stays visible while a filter is applied, and an unmatched query shows the message with the typed text retained.
+- [x] 4.2 Verify manually against a live server: typing narrows the list as you type, clearing restores it, a pending-change banner stays visible while a filter is applied, and an unmatched query shows the message with the typed text retained.
 
 ## 5. Filter on Gamerules
 
 - [x] 5.1 In `web/src/sections/Gamerules.tsx`, add filter `useState` and render `FilterBar` above the active-world rule panel. Filter `view.rules` with `matchesFilter` over `name` and `description`. Do not filter `DefaultsEditor`. Keep the report panel, liveness/queued banners, and maintenance banner outside the filter. Show a "nothing matches" message inside the rule panel when the filtered list is empty and the query is non-empty.
-- [ ] 5.2 Verify manually against a live server: typing narrows the rule list, clearing restores it, the preferred-defaults editor is unaffected, and a gamerule report banner stays visible while a filter is applied.
+- [x] 5.2 Verify manually against a live server: typing narrows the rule list, clearing restores it, the preferred-defaults editor is unaffected, and a gamerule report banner stays visible while a filter is applied.
 
 ## 6. Spec sync and full verification
 
 - [x] 6.1 Run `openspec validate panel-filtering-and-backup-download --strict` and confirm it passes.
 - [x] 6.2 Run the Python test suite (`pytest`) and the `web` build/lint, and confirm both pass with the new tests included.
-- [ ] 6.3 On the live verification host, capture a backup, download it, restore it, and confirm the player history/roster and gamerule records are intact after the restore.
+- [x] 6.3 On the live verification host, capture a backup, download it, restore it, and confirm the player history/roster and gamerule records are intact after the restore.
