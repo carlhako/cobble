@@ -258,4 +258,49 @@ describe("Updates & Backups section", () => {
     expect(await screen.findByText("Backups are failing.")).toBeInTheDocument();
     expect(screen.getByText(/not writable/)).toBeInTheDocument();
   });
+
+  it("offers a Download link for every backup, restorable or not", async () => {
+    mockFetch({
+      "GET /api/backups": {
+        backups: [
+          {
+            archive: "cobble-backup-20260601T040000.000000Z.tar.gz",
+            captured_at: "2026-06-01T04:00:00",
+            bedrock_version: "1.0.0.1",
+            shutdown_clean: true,
+            size_bytes: 2048,
+            restorable: true,
+            reason: null,
+          },
+          {
+            archive: "cobble-backup-20260501T040000.000000Z.tar.gz",
+            captured_at: "2026-05-01T04:00:00",
+            bedrock_version: "1.0.0.0",
+            shutdown_clean: true,
+            size_bytes: 1024,
+            restorable: false,
+            reason: "checksum does not match its manifest",
+          },
+        ],
+        unhealthy: null,
+      },
+    });
+    renderApp(<UpdatesBackups />);
+    await waitFor(() => expect(FakeEventSource.byUrl("/api/status/stream")).toBeTruthy());
+    push(BASE);
+
+    const links = await screen.findAllByRole("link", { name: "Download" });
+    expect(links).toHaveLength(2);
+    expect(links[0]).toHaveAttribute(
+      "href",
+      "/api/backups/cobble-backup-20260601T040000.000000Z.tar.gz",
+    );
+    expect(links[1]).toHaveAttribute(
+      "href",
+      "/api/backups/cobble-backup-20260501T040000.000000Z.tar.gz",
+    );
+    // the not-restorable row still has its download link and no Restore button
+    expect(links[1]).toHaveAttribute("download");
+    expect(screen.getAllByRole("button", { name: "Restore" })).toHaveLength(1);
+  });
 });

@@ -268,6 +268,9 @@ export const api = {
     request<RestoreResult>("POST", `/backups/${encodeURIComponent(archive)}/restore`, {
       confirm_old_version: confirmOldVersion,
     }),
+  /** URL that serves a held backup as a downloadable file (plain GET, no side
+   *  effect). Used as an <a href> rather than a fetch so the browser saves it. */
+  backupsDownloadUrl: (archive: string) => `/api/backups/${encodeURIComponent(archive)}`,
 
   players: () => request<Roster>("GET", "/players"),
   playerSessions: (xuid: string) =>

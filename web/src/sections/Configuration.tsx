@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStatus } from "../api/StatusContext";
+import { FilterBar } from "./FilterBar";
+import { matchesFilter } from "./filter";
 import {
   ApiCallError,
   api,
@@ -305,6 +307,7 @@ export function Configuration() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedOnce, setSavedOnce] = useState(false);
+  const [filter, setFilter] = useState("");
   const pendingSig = status?.config?.pending_count ?? 0;
 
   const load = useCallback(async () => {
@@ -336,6 +339,16 @@ export function Configuration() {
     const byKey = new Map(read.settings.map((s) => [s.key, s.value]));
     return Object.entries(edits).some(([k, v]) => (byKey.get(k) ?? "") !== v);
   }, [edits, read]);
+
+  // 8.1 — the filter narrows only the settings list; pending, status, and notes
+  // above are untouched. The level-name row is matched by its key like any other.
+  const shownSettings = useMemo(
+    () =>
+      read
+        ? read.settings.filter((s) => matchesFilter(filter, s.key, s.schema?.description))
+        : [],
+    [read, filter],
+  );
 
   const doWrite = async (changes: Record<string, string>) => {
     setSaving(true);
@@ -412,13 +425,25 @@ export function Configuration() {
 
       {errors._ && <div className="controls-error">{errors._}</div>}
 
+      {read && read.settings.length > 0 && (
+        <FilterBar
+          value={filter}
+          onChange={setFilter}
+          shown={shownSettings.length}
+          total={read.settings.length}
+          label="Filter settings"
+        />
+      )}
+
       <div className="panel">
         <h2>Settings</h2>
         {!read ? (
           <p className="muted">Loading…</p>
+        ) : shownSettings.length === 0 ? (
+          <p className="muted">No settings match “{filter}”.</p>
         ) : (
           <div className="cfg-list">
-            {read.settings.map((s) =>
+            {shownSettings.map((s) =>
               s.key === LEVEL_KEY && worlds ? (
                 <LevelPicker
                   key={s.key}

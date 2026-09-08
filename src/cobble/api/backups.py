@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi.responses import FileResponse
 
 from cobble.api._shared import auth_guard, conflict
 from cobble.backup.service import BackupConflictError
@@ -26,6 +27,29 @@ def build_backups_router(runtime: Runtime) -> APIRouter:
             "backups": [e.to_dict() for e in runtime.backup.list_backups()],
             "unhealthy": runtime.backup.health,
         }
+
+    @router.get("/{archive}", summary="Download a held backup archive")
+    async def download(archive: str) -> FileResponse:
+        # The name must be a bare filename that resolves to a held backup; a
+        # name with path separators or one that escapes the backup directory is
+        # refused rather than followed (server-backups: a held backup can be
+        # retrieved as a single file).
+        store = runtime.backup.store
+        if "/" in archive or "\\" in archive or archive in ("", ".", ".."):
+            raise HTTPException(status_code=404, detail={"error": "not_found", "detail": archive})
+        entry = store.get(archive)
+        if entry is None or not entry.archive.is_file():
+            raise HTTPException(status_code=404, detail={"error": "not_found", "detail": archive})
+        resolved = entry.archive.resolve()
+        if resolved.parent != store.dir.resolve():
+            raise HTTPException(status_code=404, detail={"error": "not_found", "detail": archive})
+        # A backup that failed verification is still served for inspection.
+        return FileResponse(
+            resolved,
+            media_type="application/gzip",
+            filename=entry.archive.name,
+            content_disposition_type="attachment",
+        )
 
     @router.post("", summary="Capture a backup now")
     async def capture() -> dict:

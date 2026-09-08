@@ -442,6 +442,39 @@ h2 {
 .backup-list tr.is-unusable td {
   color: var(--text-dim);
 }
+.backup-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+a.btn {
+  display: inline-block;
+  text-decoration: none;
+}
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+.filter-input {
+  font: inherit;
+  padding: 0.45rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  min-width: 16rem;
+  flex: 1 1 16rem;
+  max-width: 28rem;
+}
+.filter-count {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
 .confirm-restore {
   margin-top: 0.75rem;
 }

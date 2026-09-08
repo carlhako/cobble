@@ -339,4 +339,24 @@ describe("Gamerules section", () => {
     push({ ...BASE, maintenance: null });
     await waitFor(() => expect(screen.getByLabelText(/mobGriefing/)).not.toBeDisabled());
   });
+
+  it("filters the rule list by name and leaves the defaults editor alone", async () => {
+    await renderReady({ "GET /api/gamerules": LIVE_VIEW });
+    await screen.findByLabelText(/mobGriefing/);
+
+    const box = screen.getByRole("searchbox", { name: /filter rules/i });
+    await userEvent.type(box, "tick");
+
+    expect(screen.getByLabelText(/randomTickSpeed/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/mobGriefing/)).not.toBeInTheDocument();
+    // the preferred-defaults editor is a separate panel, untouched by the filter
+    expect(screen.getByLabelText("preferred gamerule defaults")).toBeInTheDocument();
+
+    await userEvent.clear(box);
+    await userEvent.type(box, "no-such-rule");
+    expect(screen.getByText(/No rules match/i)).toBeInTheDocument();
+
+    await userEvent.clear(box);
+    expect(screen.getByLabelText(/mobGriefing/)).toBeInTheDocument();
+  });
 });

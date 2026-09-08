@@ -446,4 +446,37 @@ describe("Configuration section", () => {
       expect(screen.queryByText(/an update is in progress/i)).not.toBeInTheDocument(),
     );
   });
+
+  it("filters the settings list by name without hiding the pending panel", async () => {
+    await renderReady(
+      {
+        "GET /api/config/worlds": WORLDS,
+        "GET /api/config": {
+          settings: SETTINGS,
+          pending: [{ key: "difficulty", saved: "hard", in_effect: "easy" }],
+        },
+      },
+      { ...BASE, config: { pending: true, pending_count: 1 } },
+    );
+    await screen.findByLabelText("difficulty");
+
+    const box = screen.getByRole("searchbox", { name: /filter settings/i });
+    await userEvent.type(box, "cheat");
+
+    // only the matching setting stays in the list
+    expect(screen.getByLabelText("allow-cheats")).toBeInTheDocument();
+    expect(screen.queryByLabelText("view-distance")).not.toBeInTheDocument();
+    // the pending panel is untouched by the filter
+    expect(screen.getByLabelText("pending configuration changes")).toBeInTheDocument();
+
+    // an unmatched query shows a message and keeps the typed text
+    await userEvent.clear(box);
+    await userEvent.type(box, "nothing-here");
+    expect(screen.getByText(/No settings match/i)).toBeInTheDocument();
+    expect((box as HTMLInputElement).value).toBe("nothing-here");
+
+    // clearing restores the full list
+    await userEvent.clear(box);
+    expect(screen.getByLabelText("view-distance")).toBeInTheDocument();
+  });
 });

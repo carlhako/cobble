@@ -342,7 +342,10 @@ function BackupsPanel({ busy }: { busy: boolean }) {
                 <td>{fmtTime(b.captured_at)}</td>
                 <td>{b.bedrock_version ?? "—"}</td>
                 <td>{fmtBytes(b.size_bytes)}</td>
-                <td>
+                <td className="backup-actions">
+                  <a className="btn" href={api.backupsDownloadUrl(b.archive)} download>
+                    Download
+                  </a>
                   {b.restorable ? (
                     <button
                       className="btn"

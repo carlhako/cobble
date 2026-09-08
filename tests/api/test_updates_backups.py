@@ -29,6 +29,7 @@ def test_openapi_lists_update_and_backup_routes(client: TestClient) -> None:
         "/api/updates/clear-failed",
         "/api/updates/diagnostics",
         "/api/backups",
+        "/api/backups/{archive}",
         "/api/backups/{archive}/restore",
     ):
         assert expected in paths, f"{expected} missing from OpenAPI schema"
@@ -85,6 +86,50 @@ def test_capture_via_route_produces_a_listable_backup(client: TestClient) -> Non
     assert made.status_code == 200 and made.json()["ok"] is True
     listed = client.get("/api/backups").json()["backups"]
     assert len(listed) == 1 and listed[0]["restorable"] is True
+
+
+# -- download a held backup as a single file --------------------
+def test_download_returns_the_archive_bytes(client: TestClient) -> None:
+    client.post("/api/backups")
+    name = client.get("/api/backups").json()["backups"][0]["archive"]
+
+    resp = client.get(f"/api/backups/{name}")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/gzip"
+    assert "attachment" in resp.headers["content-disposition"]
+    assert name in resp.headers["content-disposition"]
+
+    on_disk = client.app.state.runtime.backup.store.dir / name
+    assert resp.content == on_disk.read_bytes()
+
+
+def test_download_of_an_unknown_name_is_404(client: TestClient) -> None:
+    resp = client.get("/api/backups/nope.tar.gz")
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["error"] == "not_found"
+
+
+def test_download_rejects_a_name_with_an_encoded_separator(client: TestClient) -> None:
+    # An encoded slash keeps this a single path segment, so it reaches the route
+    # and must be refused rather than joined onto the backup directory.
+    resp = client.get("/api/backups/foo%2Fbar.tar.gz")
+    assert resp.status_code == 404
+    assert b"root:" not in resp.content
+
+
+def test_download_of_a_not_restorable_backup_still_succeeds(client: TestClient) -> None:
+    client.post("/api/backups")
+    store = client.app.state.runtime.backup.store
+    name = client.get("/api/backups").json()["backups"][0]["archive"]
+    # Corrupt the archive body; the sidecar (manifest) stays intact so the entry
+    # is still listed, now as not restorable.
+    (store.dir / name).write_bytes(b"not a tar")
+    listed = client.get("/api/backups").json()["backups"][0]
+    assert listed["restorable"] is False
+
+    resp = client.get(f"/api/backups/{name}")
+    assert resp.status_code == 200
+    assert resp.content == b"not a tar"
 
 
 # -- 8.3 status payload carries the new blocks --------------

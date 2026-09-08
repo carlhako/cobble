@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStatus } from "../api/StatusContext";
+import { FilterBar } from "./FilterBar";
+import { matchesFilter } from "./filter";
 import {
   ApiCallError,
   api,
@@ -369,6 +371,7 @@ export function Gamerules() {
   const [busyRule, setBusyRule] = useState<string | null>(null);
   const [queuedNote, setQueuedNote] = useState<string | null>(null);
   const [ackWorking, setAckWorking] = useState(false);
+  const [filter, setFilter] = useState("");
   // Bumped on a refusal so an uncontrolled number/text input remounts and
   // reverts to the value in effect (6.3).
   const [nonce, setNonce] = useState(0);
@@ -390,6 +393,16 @@ export function Gamerules() {
   }, [load, running, readSig, reportSig]);
 
   const editingDisabled = maintenance !== null || stale;
+
+  // 8.1 — the filter narrows only the active world's rule list; the report
+  // panel, banners, and the preferred-defaults editor are untouched.
+  const shownRules = useMemo(
+    () =>
+      view
+        ? view.rules.filter((row) => matchesFilter(filter, row.name, row.description))
+        : [],
+    [view, filter],
+  );
 
   const apply = async (row: GameruleRow, next: GameruleValue) => {
     setBusyRule(row.name);
@@ -488,6 +501,16 @@ export function Gamerules() {
         </div>
       )}
 
+      {view && view.liveness !== "unread" && view.rules.length > 0 && (
+        <FilterBar
+          value={filter}
+          onChange={setFilter}
+          shown={shownRules.length}
+          total={view.rules.length}
+          label="Filter rules"
+        />
+      )}
+
       {view && view.liveness === "unread" ? (
         <div className="panel" role="status">
           <p className="muted">
@@ -508,9 +531,11 @@ export function Gamerules() {
           </h2>
           {!view ? (
             <p className="muted">Loading…</p>
+          ) : shownRules.length === 0 ? (
+            <p className="muted">No rules match “{filter}”.</p>
           ) : (
             <div className="cfg-list">
-              {view.rules.map((row) => (
+              {shownRules.map((row) => (
                 <RuleControl
                   key={row.name}
                   row={row}
