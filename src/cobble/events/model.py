@@ -18,6 +18,10 @@ class EventType(enum.StrEnum):
     PLAYER_CONNECTED = "player_connected"
     PLAYER_DISCONNECTED = "player_disconnected"
     PLAYER_SPAWNED = "player_spawned"
+    ALLOWLIST_ENABLED = "allowlist_enabled"
+    ALLOWLIST_DISABLED = "allowlist_disabled"
+    ALLOWLIST_ADDED = "allowlist_added"
+    ALLOWLIST_REMOVED = "allowlist_removed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +61,36 @@ class PlayerSpawned(Event):
     type: ClassVar[EventType] = EventType.PLAYER_SPAWNED
     xuid: str = ""
     gamertag: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class AllowlistEnabled(Event):
+    """The server announced ``Turned on the allowlist`` (design.md D5)."""
+
+    type: ClassVar[EventType] = EventType.ALLOWLIST_ENABLED
+
+
+@dataclass(frozen=True, slots=True)
+class AllowlistDisabled(Event):
+    """The server announced ``Turned off the allowlist``."""
+
+    type: ClassVar[EventType] = EventType.ALLOWLIST_DISABLED
+
+
+@dataclass(frozen=True, slots=True)
+class AllowlistAdded(Event):
+    """The server announced a player was added to the allowlist."""
+
+    type: ClassVar[EventType] = EventType.ALLOWLIST_ADDED
+    name: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class AllowlistRemoved(Event):
+    """The server announced a player was removed from the allowlist."""
+
+    type: ClassVar[EventType] = EventType.ALLOWLIST_REMOVED
+    name: str = ""
 
 
 PLAYER_EVENT_TYPES = (

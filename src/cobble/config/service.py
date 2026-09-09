@@ -12,20 +12,27 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from cobble.access.enforcement import Enforcement, EnforcementTracker
 from cobble.acquisition.layout import Layout
 from cobble.config.properties import PropertiesDocument
 from cobble.config.schema import PropertySchema, ValidationIssue, lookup, validate
 from cobble.logging import get_logger
 from cobble.settings import Settings
+from cobble.supervisor.state import RunState
 from cobble.supervisor.supervisor import MaintenanceInProgressError, Supervisor
 
 log = get_logger("config.service")
 
 _DEFAULT_LEVEL_NAME = "Bedrock level"
 
+# ``allow-list`` is applied to the running server when saved (design.md D5), so
+# it is never "pending until restart" the way every other setting is (task 2.6).
+_LIVE_APPLIED_KEYS = frozenset({"allow-list"})
+
 __all__ = [
     "ConfigService",
     "ConfigWriteResult",
+    "EnforcementView",
     "PendingChange",
     "Setting",
     "WorldInfo",
@@ -83,6 +90,25 @@ class PendingChange:
 
 
 @dataclass(frozen=True)
+class EnforcementView:
+    """The allowlist-enforcement comparison reported in place of a pending entry
+    for ``allow-list`` (server-config spec; task 2.6)."""
+
+    saved: bool
+    in_effect: str  # "on" | "off" | "unknown"
+    running: bool
+    disagreement: bool
+
+    def to_dict(self) -> dict:
+        return {
+            "saved": self.saved,
+            "in_effect": self.in_effect,
+            "running": self.running,
+            "disagreement": self.disagreement,
+        }
+
+
+@dataclass(frozen=True)
 class ConfigWriteResult:
     ok: bool
     errors: tuple[ValidationIssue, ...]
@@ -110,11 +136,17 @@ class ConfigService:
         supervisor: Supervisor,
         *,
         on_change: Callable[[], None] | None = None,
+        enforcement: EnforcementTracker | None = None,
+        apply_enforcement: Callable[[bool], None] | None = None,
     ) -> None:
         self._settings = settings
         self._layout = layout
         self._sup = supervisor
         self._on_change = on_change
+        # Live allowlist-enforcement state (observed) and the hook that pushes a
+        # saved change to the running server (design.md D5; tasks 2.5, 2.6).
+        self._enforcement = enforcement
+        self._apply_enforcement = apply_enforcement
 
     # -- paths --------------------------------------------------
     @property
@@ -169,11 +201,39 @@ class ConfigService:
         saved = self._document().effective()
         out: list[PendingChange] = []
         for key in sorted(set(saved) | set(snapshot)):
+            if key in _LIVE_APPLIED_KEYS:
+                continue  # reported via enforcement_view(), never as pending (task 2.6)
             saved_value = saved.get(key)
             effective_value = snapshot.get(key)
             if saved_value != effective_value:
                 out.append(PendingChange(key=key, saved=saved_value, in_effect=effective_value))
         return out
+
+    def _saved_allow_list(self) -> bool:
+        raw = (self._document().get("allow-list") or "false").strip().lower()
+        return raw == "true"
+
+    def saved_allow_list(self) -> bool:
+        """The persisted ``allow-list`` value (``server.properties``), regardless
+        of what the running server is enforcing."""
+        return self._saved_allow_list()
+
+    def enforcement_view(self) -> EnforcementView:
+        """The saved ``allow-list`` value against the enforcement the running
+        server is actually applying (server-config spec; task 2.6). ``in_effect``
+        is ``"unknown"`` until a transition has been observed."""
+        saved = self._saved_allow_list()
+        running = self._sup.state is RunState.RUNNING
+        live = self._enforcement.state if self._enforcement is not None else Enforcement.UNKNOWN
+        if not running:
+            return EnforcementView(
+                saved=saved, in_effect="unknown", running=False, disagreement=False
+            )
+        in_effect = live.value
+        disagreement = live is not Enforcement.UNKNOWN and (live is Enforcement.ON) != saved
+        return EnforcementView(
+            saved=saved, in_effect=in_effect, running=True, disagreement=disagreement
+        )
 
     # -- writes -------------------------------------------------
     def write(self, changes: dict[str, str]) -> ConfigWriteResult:
@@ -223,6 +283,17 @@ class ConfigService:
             log.info("configuration updated: %s", ", ".join(changed))
             if self._on_change is not None:
                 self._on_change()
+
+        # ``allow-list`` is applied to the running server as well as the file
+        # (design.md D5). The instruction is only issued once the file write
+        # above has succeeded — a failed persist raises out of doc.save() and
+        # never reaches here (task 2.5).
+        if "allow-list" in changes and self._apply_enforcement is not None:
+            want_on = changes["allow-list"].strip().lower() == "true"
+            try:
+                self._apply_enforcement(want_on)
+            except Exception:
+                log.exception("applying allow-list enforcement to the running server failed")
 
         return ConfigWriteResult(
             ok=True,

@@ -33,11 +33,14 @@ SCHEMA_VERSION = 1
 DB_FILENAME = "cobble.db"
 
 # How a session ended. A reconstructed end was inferred on the next startup
-# rather than observed, and is reported as approximate everywhere (D1).
+# rather than observed, and is reported as approximate everywhere (D1). A kicked
+# end is observed exactly like an ordinary departure — the departure line is the
+# same — so its duration is exact, not approximate (server-players spec; 4.3).
 END_OBSERVED = "observed"
 END_SERVER_STOP = "server_stop"
 END_SERVER_EXIT = "server_exit"
 END_RECONSTRUCTED = "reconstructed"
+END_KICKED = "kicked"
 
 APPROXIMATE_END_REASONS: frozenset[str] = frozenset({END_RECONSTRUCTED})
 

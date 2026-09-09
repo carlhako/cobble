@@ -10,6 +10,10 @@ discarded"). A malformed variant of a known line simply falls through to
 from __future__ import annotations
 
 from cobble.events.model import (
+    AllowlistAdded,
+    AllowlistDisabled,
+    AllowlistEnabled,
+    AllowlistRemoved,
     Event,
     PlayerConnected,
     PlayerDisconnected,
@@ -18,6 +22,10 @@ from cobble.events.model import (
     ServerReady,
 )
 from cobble.events.patterns import (
+    ALLOWLIST_ADDED_RE,
+    ALLOWLIST_DISABLED_RE,
+    ALLOWLIST_ENABLED_RE,
+    ALLOWLIST_REMOVED_RE,
     PLAYER_CONNECTED_RE,
     PLAYER_DISCONNECTED_RE,
     PLAYER_SPAWNED_RE,
@@ -28,6 +36,19 @@ from cobble.events.patterns import (
 def parse_line(line: str) -> Event:
     if READINESS_RE.search(line):
         return ServerReady(raw=line)
+
+    if ALLOWLIST_ENABLED_RE.search(line):
+        return AllowlistEnabled(raw=line)
+    if ALLOWLIST_DISABLED_RE.search(line):
+        return AllowlistDisabled(raw=line)
+
+    m = ALLOWLIST_ADDED_RE.search(line)
+    if m:
+        return AllowlistAdded(raw=line, name=m["name"].strip())
+
+    m = ALLOWLIST_REMOVED_RE.search(line)
+    if m:
+        return AllowlistRemoved(raw=line, name=m["name"].strip())
 
     m = PLAYER_CONNECTED_RE.search(line)
     if m:

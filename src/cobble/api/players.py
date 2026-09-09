@@ -1,9 +1,10 @@
-"""Player roster routes (server-players spec, section 6).
+"""Player roster routes (server-players spec, section 6) plus the moderation
+routes M6 adds (kick, ban, unban — section 7.3).
 
-Read-only, and unauthenticated like ``/api/status`` — this change adds no
-state-changing route, so nothing here depends on ``auth_guard`` (design.md D8;
-task 6.4). A database that could not be opened at startup is surfaced here as a
-503 rather than an empty roster.
+The roster reads are unauthenticated like ``/api/status``. The moderation routes
+change state and depend on ``auth_guard`` like every other state-changing route
+(design.md D8). A database that could not be opened at startup is surfaced here
+as a 503 rather than an empty roster.
 """
 
 from __future__ import annotations
@@ -11,12 +12,26 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
+from cobble.access.service import NotConnectedError, UnknownPlayerError
+from cobble.api._shared import auth_guard, conflict
 from cobble.players.storage import PlayerStore, RosterEntry, SessionRow
+from cobble.supervisor.supervisor import MaintenanceInProgressError, NotRunningError
 
 if TYPE_CHECKING:
     from cobble.runtime import Runtime
+
+
+class KickBody(BaseModel):
+    reason: str = Field(default="", max_length=200)
+
+
+class BanBody(BaseModel):
+    reason: str = Field(default="", max_length=200)
+    confirm: bool = False
+    permit_excluded: bool = False
 
 
 def _entry_json(e: RosterEntry) -> dict:
@@ -58,6 +73,17 @@ def build_players_router(runtime: Runtime) -> APIRouter:
             )
         return runtime.players
 
+    def _require_player(xuid: str) -> str:
+        """The current display name for ``xuid``, or a 404 if cobble has no
+        recorded session for that identifier (task 7.3)."""
+        store = _store()
+        if not store.player_exists(xuid):
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "unknown_player", "detail": f"no player {xuid!r} on record"},
+            )
+        return runtime._roster_names().get(xuid, xuid)
+
     @router.get("", summary="The player roster")
     async def roster() -> dict:
         store = _store()
@@ -83,5 +109,66 @@ def build_players_router(runtime: Runtime) -> APIRouter:
             "gamertag": rows[0].gamertag if rows else "",
             "sessions": [_session_json(s) for s in rows],
         }
+
+    # -- moderation (section 7.3) ---------------------------------
+    @router.post(
+        "/{xuid}/kick",
+        summary="Disconnect a connected player",
+        dependencies=[Depends(auth_guard)],
+    )
+    async def kick(xuid: str, body: KickBody) -> dict:
+        name = _require_player(xuid)
+        try:
+            result = await runtime.access.kick(xuid, name, body.reason)
+        except NotRunningError as exc:
+            raise conflict(exc.code, str(exc)) from exc
+        except NotConnectedError as exc:
+            raise conflict(exc.code, str(exc)) from exc
+        return result.to_dict()
+
+    @router.post(
+        "/{xuid}/ban",
+        summary="Ban a player (composite: allowlist, enforcement, kick, record)",
+        dependencies=[Depends(auth_guard)],
+    )
+    async def ban(xuid: str, body: BanBody) -> dict:
+        _require_player(xuid)
+        try:
+            result = await runtime.access.ban(
+                xuid, body.reason, confirm=body.confirm, permit_excluded=body.permit_excluded
+            )
+        except MaintenanceInProgressError as exc:
+            raise conflict(exc.code, str(exc)) from exc
+        except UnknownPlayerError as exc:
+            raise HTTPException(
+                status_code=404, detail={"error": exc.code, "detail": str(exc)}
+            ) from exc
+        if result.needs_confirmation:
+            # The exclusion preview, not the ban (task 7.5).
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "confirmation_required",
+                    "detail": "enabling allowlist enforcement would exclude other players",
+                    "would_exclude": list(result.would_exclude),
+                },
+            )
+        return result.to_dict()
+
+    @router.post(
+        "/{xuid}/unban",
+        summary="Lift a recorded ban",
+        dependencies=[Depends(auth_guard)],
+    )
+    async def unban(xuid: str) -> dict:
+        try:
+            result = await runtime.access.unban(xuid)
+        except MaintenanceInProgressError as exc:
+            raise conflict(exc.code, str(exc)) from exc
+        except UnknownPlayerError as exc:
+            raise HTTPException(
+                status_code=404, detail={"error": exc.code, "detail": str(exc)}
+            ) from exc
+        return result.to_dict()
 
     return router

@@ -22,6 +22,11 @@ from dataclasses import dataclass
 
 from fastapi import FastAPI
 
+from cobble.access.documents import AllowlistFile, PermissionsFile
+from cobble.access.enforcement import EnforcementTracker
+from cobble.access.service import AccessService
+from cobble.access.store import BanStoreError
+from cobble.access.store import open_ban_store as _open_ban_store
 from cobble.acquisition.bootstrap import bootstrap_if_needed
 from cobble.acquisition.layout import Layout
 from cobble.acquisition.migration import LayoutMigration, MigrationError
@@ -71,6 +76,9 @@ class Runtime:
         self.scheduler = Scheduler(settings, self.backup, self.update)
         self.migration = LayoutMigration(settings, self.layout, self.supervisor, self.backup)
         self.console = Console(self.supervisor)
+        # Live allowlist-enforcement state, learned by observing the server's
+        # announcements (M6, design.md D5).
+        self.enforcement = EnforcementTracker()
         # A successful configuration save pushes the new pending state to clients
         # (server-status spec, task 5.2); start/restart pushes happen via the
         # tracker's run-state subscription.
@@ -79,6 +87,8 @@ class Runtime:
             self.layout,
             self.supervisor,
             on_change=lambda: self.status.notify(),
+            enforcement=self.enforcement,
+            apply_enforcement=lambda on: self.access.apply_enforcement(on),
         )
 
         # Gamerule editing (M5). Shares ``cobble.db`` with player history; a
@@ -103,17 +113,6 @@ class Runtime:
             # its gamerules rather than adopting the reverted set (design.md D6).
             self.backup.set_on_restored(self.gamerules.mark_restored)
 
-        self.status = StatusTracker(
-            self.supervisor,
-            bootstrap=self.bootstrap,
-            update=self.update,
-            backup=self.backup,
-            scheduler=self.scheduler,
-            config=self.config,
-            gamerules=self.gamerules,
-        )
-        self.bus.subscribe(self.status.on_event)
-
         # Durable player history (M4). A database that cannot be opened is
         # surfaced and the server still starts (server-players spec); the roster
         # simply records nothing this run.
@@ -131,8 +130,69 @@ class Runtime:
                 checkpoint_seconds=settings.player_history_checkpoint_seconds,
             )
 
+        # Access control (M6): the allowlist, permissions, enforcement state, and
+        # the ban record. A ban store that cannot be opened disables the durable
+        # ban record for the run; the rest of access still works.
+        self.ban_store = None
+        try:
+            self.ban_store = _open_ban_store(settings.player_db_file)
+        except BanStoreError:
+            log.exception("ban record unavailable; bans will not be recorded this run")
+        self.access = AccessService(
+            self.console,
+            self.supervisor,
+            self.enforcement,
+            saved_allow_list=self.config.saved_allow_list,
+            ban_store=self.ban_store,
+            kick_intents=(
+                self.player_history.kick_intents if self.player_history is not None else None
+            ),
+            is_connected=self._player_online,
+            permissions_file=PermissionsFile(self.layout.data_dir / "permissions.json"),
+            allowlist_file=AllowlistFile(self.layout.data_dir / "allowlist.json"),
+            name_for=lambda xuid: self._roster_names().get(xuid),
+            roster_names=self._roster_names,
+            save_allow_list=lambda on: self.config.write({"allow-list": "true" if on else "false"}),
+        )
+        self.bus.subscribe(self.access.on_event)
+
+        self.status = StatusTracker(
+            self.supervisor,
+            bootstrap=self.bootstrap,
+            update=self.update,
+            backup=self.backup,
+            scheduler=self.scheduler,
+            config=self.config,
+            gamerules=self.gamerules,
+            access=self.access,
+        )
+        self.bus.subscribe(self.status.on_event)
+
         self._app: FastAPI | None = None
         self._bootstrap_task: asyncio.Task[None] | None = None
+
+    # -- access-service collaborators -------------------------------
+    def _roster_names(self) -> dict[str, str]:
+        """xuid -> current display name for every player with a recorded session
+        (the identity join the access service needs — design.md Context)."""
+        if self.players is None:
+            return {}
+        from datetime import UTC, datetime
+
+        try:
+            return {e.xuid: e.gamertag for e in self.players.roster(now=datetime.now(UTC))}
+        except Exception:
+            log.exception("building the roster name map failed; treating it as empty")
+            return {}
+
+    def _player_online(self, xuid: str) -> bool:
+        if self.players is None:
+            return False
+        try:
+            return self.players.has_open_session(xuid)
+        except Exception:
+            log.exception("checking whether %r is online failed", xuid)
+            return False
 
     def attach(self, app: FastAPI) -> None:
         self._app = app
@@ -232,6 +292,9 @@ class Runtime:
                 await self._bootstrap_task
         await self.scheduler.stop()
         await self.supervisor.aclose()
+        await self.access.aclose()
+        if self.ban_store is not None:
+            self.ban_store.close()
         if self.gamerules is not None:
             await self.gamerules.aclose()
         if self.player_history is not None:

@@ -114,6 +114,7 @@ class StatusSnapshot:
     backup: BackupView | None = None
     config: ConfigView | None = None
     gamerules: dict | None = None
+    access: dict | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -185,6 +186,7 @@ class StatusSnapshot:
                 }
             ),
             "gamerules": self.gamerules,
+            "access": self.access,
         }
 
 
@@ -205,6 +207,7 @@ class StatusTracker:
         scheduler=None,
         config=None,
         gamerules=None,
+        access=None,
     ) -> None:
         self._sup = supervisor
         self._clock = clock
@@ -214,6 +217,7 @@ class StatusTracker:
         self._scheduler = scheduler  # Scheduler or None
         self._config = config  # ConfigService or None
         self._gamerules = gamerules  # GameruleManager or None
+        self._access = access  # AccessService or None
         self._online: dict[str, str] = {}  # xuid -> gamertag
         self._incomplete = False
         self._subs: set[_Sub] = set()
@@ -244,6 +248,10 @@ class StatusTracker:
             if event.xuid not in self._online:
                 self._incomplete = True
             self._online.pop(event.xuid, None)
+            self._emit()
+        elif event.type in (EventType.ALLOWLIST_ENABLED, EventType.ALLOWLIST_DISABLED):
+            # Enforcement changed — push a fresh snapshot so a connected client
+            # sees the access block update without polling (task 8.3).
             self._emit()
 
     def _on_state_change(self, _frm: RunState, to: RunState) -> None:
@@ -304,7 +312,45 @@ class StatusTracker:
             backup=self._backup_view(),
             config=self._config_view(),
             gamerules=self._gamerules_block(),
+            access=self._access_block(),
         )
+
+    def _access_block(self) -> dict | None:
+        """Standing access posture: whether the allowlist is being enforced right
+        now, how that compares to the saved configuration, and the recorded ban
+        count (server-status spec; tasks 8.1, 8.2). An unobserved enforcement
+        state is reported as ``"unknown"``, never guessed."""
+        if self._config is None and self._access is None:
+            return None
+        try:
+            view = self._config.enforcement_view() if self._config is not None else None
+        except Exception:
+            log.exception("enforcement view failed; reporting access as unknown")
+            view = None
+        ban_count = 0
+        if self._access is not None:
+            try:
+                ban_count = self._access.banned_count()
+            except Exception:
+                log.exception("ban count failed; reporting zero")
+        if view is None:
+            return {
+                "running": self._sup.state == RunState.RUNNING,
+                "in_effect": "unknown",
+                "saved": None,
+                "disagreement": False,
+                "ban_count": ban_count,
+            }
+        return {
+            "running": view.running,
+            # While running: the observed live value ("on"/"off"), or "unknown"
+            # until a transition has been seen. While stopped: always "unknown"
+            # live — read ``saved`` for what the next start will apply (task 8.2).
+            "in_effect": view.in_effect,
+            "saved": view.saved,
+            "disagreement": view.disagreement,
+            "ban_count": ban_count,
+        }
 
     def _gamerules_block(self) -> dict | None:
         if self._gamerules is None:
