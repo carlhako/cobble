@@ -6,7 +6,7 @@
 - [x] 1.4 Add the same document handling for `permissions.json`, preserving BDS's three-space indentation and spaced-colon formatting on write (design.md Context); verify a test round-trips a file in the verbatim BDS format from design.md Context and asserts a byte-identical result when nothing changed
 - [x] 1.5 Write both documents atomically through the same temp-file-and-replace approach `server.properties` writes already use; verify a test asserts an interrupted write leaves the previous file intact
 - [x] 1.6 Re-read before every write rather than caching, so an out-of-band edit is not clobbered by a stale view (design.md Risks); verify a test mutates the file between a read and a write and asserts the write is based on the newer content
-- [ ] 1.7 Probe whether BDS preserves an `xuid` field cobble writes into an allowlist entry (design.md Open Questions); record the result in design.md Context and, if it is stripped, mark D4 as degraded to name-only  <!-- BLOCKED: live probe on cobble-2, belongs with section 10 -->
+- [x] 1.7 Probe whether BDS preserves an `xuid` field cobble writes into an allowlist entry (design.md Open Questions); record the result in design.md Context and, if it is stripped, mark D4 as degraded to name-only  <!-- VERIFIED on cobble-2 (BDS 1.26.45.1): cobble wrote {"ignoresPlayerLimit":false,"name":"Matthew1396","xuid":"2533275031569649"}; after BDS did a full rewrite (`allowlist add ProbeGuy`) the xuid entry survived intact. D4 holds, no degradation. -->
 
 
 ## 2. Allowlist enforcement state
@@ -80,10 +80,11 @@
 
 ## 10. Live verification on cobble-2
 
-- [ ] 10.1 Deploy the branch to cobble-2 and confirm the allowlist and permissions read correctly against the real files, including a server whose allowlist has been emptied to the `null` form by BDS itself; verify both read as empty with no error
-- [ ] 10.2 Ban a connected player end to end with the live bot client and verify they are disconnected, absent from the allowlist, recorded as banned, and unable to rejoin while enforcement is on
-- [ ] 10.3 Verify the exclusion preview names the right players by banning on a server whose roster contains players absent from the allowlist
-- [ ] 10.4 Unban that player and verify they rejoin, and that enforcement was not changed by the unban
-- [ ] 10.5 Kick a connected player and verify the session is recorded as ended by a kick with an exact duration, and that a voluntary leave in the same session history is not
-- [ ] 10.6 Grant and remove operator rights on an offline player and verify the change survives a server restart
-- [ ] 10.7 Change enforcement from the console section directly and verify cobble reports the live state and the disagreement with `server.properties`, then verify the next server start reconciles it
+- [x] 10.1 Deploy the branch to cobble-2 and confirm the allowlist and permissions read correctly against the real files, including a server whose allowlist has been emptied to the `null` form by BDS itself; verify both read as empty with no error  <!-- VERIFIED: deployed to cobble-2; `allowlist remove` of the last entry left literal `null` (cat -A: `null$`), cobble `/api/access` read it as {readable:true, entries:[]}; permissions.json read joins xuid 2533275031569649 -> "Matthew1396". -->
+- [ ] 10.2 Ban a connected player end to end with the live bot client and verify they are disconnected, absent from the allowlist, recorded as banned, and unable to rejoin while enforcement is on  <!-- BLOCKED: bot MSA token cache is stale (prints a device code); needs a human sign-in at microsoft.com/link or a manual client test. -->
+- [ ] 10.3 Verify the exclusion preview names the right players by banning on a server whose roster contains players absent from the allowlist  <!-- PARTIAL: confirmation gate verified live (409 confirmation_required, nothing applied, no ban recorded, enforcement unchanged). Non-empty would_exclude needs a 2nd roster account -> blocked on the bot. -->
+- [ ] 10.4 Unban that player and verify they rejoin, and that enforcement was not changed by the unban  <!-- BLOCKED: needs the bot. -->
+- [ ] 10.5 Kick a connected player and verify the session is recorded as ended by a kick with an exact duration, and that a voluntary leave in the same session history is not  <!-- BLOCKED: needs the bot. -->
+- [x] 10.6 Grant and remove operator rights on an offline player and verify the change survives a server restart  <!-- VERIFIED: Matthew1396 (offline) member<->operator via /api/access/permissions, each reloaded:true, permissions.json written in BDS format; survived `systemctl restart cobble`. -->
+- [x] 10.7 Change enforcement from the console section directly and verify cobble reports the live state and the disagreement with `server.properties`, then verify the next server start reconciles it  <!-- VERIFIED: console `allowlist on` -> cobble /api/access {saved:false, in_effect:'on', disagreement:true}; after `/api/server/restart` the readiness assertion issued `allowlist off` and reconciled to {in_effect:'off', disagreement:false}. -->
+
