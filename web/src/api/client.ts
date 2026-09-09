@@ -8,9 +8,13 @@ export interface ApiError {
 
 export class ApiCallError extends Error {
   code: string;
-  constructor(code: string, detail: string) {
+  /** The structured error body, when the server sent one (e.g. a ban's
+   *  `would_exclude` list on a `confirmation_required` refusal). */
+  body: Record<string, unknown> | null;
+  constructor(code: string, detail: string, body: Record<string, unknown> | null = null) {
     super(detail || code);
     this.code = code;
+    this.body = body;
   }
 }
 
@@ -23,18 +27,22 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   if (!resp.ok) {
     let code = `http_${resp.status}`;
     let detail = resp.statusText;
+    let body: Record<string, unknown> | null = null;
     try {
-      const data = (await resp.json()) as { detail?: ApiError | string };
+      const data = (await resp.json()) as {
+        detail?: (ApiError & Record<string, unknown>) | string;
+      };
       if (data.detail && typeof data.detail === "object") {
         code = data.detail.error;
         detail = data.detail.detail;
+        body = data.detail;
       } else if (typeof data.detail === "string") {
         detail = data.detail;
       }
     } catch {
       // non-JSON error body; keep the defaults
     }
-    throw new ApiCallError(code, detail);
+    throw new ApiCallError(code, detail, body);
   }
   if (resp.status === 204) return undefined as T;
   return (await resp.json()) as T;
@@ -135,7 +143,7 @@ export interface ConfigWriteResult {
 }
 
 export type SessionEndReason =
-  "observed" | "server_stop" | "server_exit" | "reconstructed" | null;
+  "observed" | "server_stop" | "server_exit" | "reconstructed" | "kicked" | null;
 
 export interface RosterPlayer {
   xuid: string;
@@ -242,6 +250,76 @@ export interface GameruleDefaults {
   catalogue: GameruleCatalogueEntry[];
 }
 
+// --- Access control (M6) -----------------------------------------
+export type PermissionLevel = "visitor" | "member" | "operator";
+
+export interface AllowlistEntry {
+  name: string;
+  xuid: string | null;
+  has_identifier: boolean;
+  has_played: boolean;
+}
+
+export interface PermissionRecord {
+  xuid: string;
+  level: PermissionLevel;
+  name: string | null;
+}
+
+export interface BanRecordApi {
+  xuid: string;
+  name: string;
+  reason: string;
+  banned_at: string;
+  lifted_at: string | null;
+  active: boolean;
+}
+
+export interface EnforcementView {
+  saved: boolean;
+  in_effect: "on" | "off" | "unknown";
+  running: boolean;
+  disagreement: boolean;
+}
+
+export interface AccessRead {
+  allowlist: { readable: boolean; entries: AllowlistEntry[] };
+  permissions: PermissionRecord[];
+  enforcement: EnforcementView;
+  bans: BanRecordApi[];
+}
+
+export interface KickResultApi {
+  xuid: string;
+  command: string;
+  confirmed: boolean;
+  unconfirmed: boolean;
+  no_target: boolean;
+}
+
+export interface BanResultApi {
+  xuid: string;
+  name: string;
+  needs_confirmation: boolean;
+  would_exclude: string[];
+  steps: string[];
+  kick: KickResultApi | null;
+  identifier_written: boolean;
+}
+
+export interface UnbanResultApi {
+  xuid: string;
+  name: string;
+  steps: string[];
+}
+
+/** 409 body when a ban would enable enforcement (task 9.3). */
+export interface BanConfirmationRequired {
+  error: "confirmation_required";
+  detail: string;
+  would_exclude: string[];
+}
+
 export const api = {
   start: () => request<StatusPayload>("POST", "/server/start"),
   stop: () => request<StatusPayload>("POST", "/server/stop"),
@@ -293,6 +371,46 @@ export const api = {
       `/gamerules/defaults/${encodeURIComponent(name)}`,
     ),
   gamerulesAcknowledge: () => request<{ ok: boolean }>("POST", "/gamerules/acknowledge"),
+
+  accessRead: () => request<AccessRead>("GET", "/access"),
+  accessAllowlistAdd: (name: string) =>
+    request<{ entry: AllowlistEntry }>("POST", "/access/allowlist", { name }),
+  accessAllowlistRemove: (opts: { name?: string; xuid?: string }) => {
+    const q = new URLSearchParams();
+    if (opts.name) q.set("name", opts.name);
+    if (opts.xuid) q.set("xuid", opts.xuid);
+    return request<{ removed: boolean }>("DELETE", `/access/allowlist?${q.toString()}`);
+  },
+  accessPermissionsSet: (xuid: string, level: PermissionLevel) =>
+    request<{ xuid: string; level: PermissionLevel; reloaded: boolean }>(
+      "POST",
+      "/access/permissions",
+      { xuid, level },
+    ),
+  accessEnforcementSet: (enabled: boolean) =>
+    request<{ ok: boolean; enforcement: EnforcementView }>(
+      "POST",
+      "/access/enforcement",
+      {
+        enabled,
+      },
+    ),
+
+  playerKick: (xuid: string, reason = "") =>
+    request<KickResultApi>("POST", `/players/${encodeURIComponent(xuid)}/kick`, {
+      reason,
+    }),
+  playerBan: (
+    xuid: string,
+    opts: { reason?: string; confirm?: boolean; permit_excluded?: boolean } = {},
+  ) =>
+    request<BanResultApi>("POST", `/players/${encodeURIComponent(xuid)}/ban`, {
+      reason: opts.reason ?? "",
+      confirm: opts.confirm ?? false,
+      permit_excluded: opts.permit_excluded ?? false,
+    }),
+  playerUnban: (xuid: string) =>
+    request<UnbanResultApi>("POST", `/players/${encodeURIComponent(xuid)}/unban`),
 };
 
 export type BootstrapState = "skipped" | "not_needed" | "running" | "done" | "failed";
@@ -369,5 +487,12 @@ export interface StatusPayload {
     liveness: GameruleLiveness;
     last_read_at: string | null;
     report: GameruleReport | null;
+  } | null;
+  access: {
+    running: boolean;
+    in_effect: "on" | "off" | "unknown";
+    saved: boolean | null;
+    disagreement: boolean;
+    ban_count: number;
   } | null;
 }

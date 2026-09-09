@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 
 from cobble.events.bus import EventBus
 from cobble.logging import get_logger
+from cobble.players.kick import KickIntentRegistry
 from cobble.players.recorder import SessionRecorder
 from cobble.players.storage import END_SERVER_EXIT, END_SERVER_STOP, PlayerStore
 from cobble.supervisor.state import RunState
@@ -49,7 +50,10 @@ class PlayerHistoryService:
         self._sup = supervisor
         self._clock = clock
         self._checkpoint_seconds = checkpoint_seconds
-        self._recorder = SessionRecorder(store, clock=clock)
+        # The kick-intent registry is shared with the access service, which
+        # registers an intent before it issues a kick (design.md D6).
+        self.kick_intents = KickIntentRegistry()
+        self._recorder = SessionRecorder(store, clock=clock, kick_intents=self.kick_intents)
         self._checkpoint_task: asyncio.Task[None] | None = None
 
         bus.subscribe(self._recorder.on_event)

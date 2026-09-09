@@ -25,7 +25,8 @@ from cobble.events.model import (
     PlayerSpawned,
 )
 from cobble.logging import get_logger
-from cobble.players.storage import END_OBSERVED, END_RECONSTRUCTED, PlayerStore
+from cobble.players.kick import KickIntentRegistry
+from cobble.players.storage import END_KICKED, END_OBSERVED, END_RECONSTRUCTED, PlayerStore
 
 log = get_logger("players.recorder")
 
@@ -37,9 +38,16 @@ def _utcnow() -> datetime:
 
 
 class SessionRecorder:
-    def __init__(self, store: PlayerStore, *, clock: Clock = _utcnow) -> None:
+    def __init__(
+        self,
+        store: PlayerStore,
+        *,
+        clock: Clock = _utcnow,
+        kick_intents: KickIntentRegistry | None = None,
+    ) -> None:
         self._store = store
         self._clock = clock
+        self._kicks = kick_intents
 
     def on_event(self, event: Event) -> None:
         """Bus callback. Fast and non-raising (D7): any failure is logged and
@@ -67,4 +75,11 @@ class SessionRecorder:
         elif event.type == EventType.PLAYER_SPAWNED and isinstance(event, PlayerSpawned):
             self._store.record_spawn(event.xuid, now)
         elif event.type == EventType.PLAYER_DISCONNECTED and isinstance(event, PlayerDisconnected):
-            self._store.close_session(event.xuid, now, END_OBSERVED)
+            # A departure under a registered kick intent is attributed to the
+            # kick (design.md D6). The disconnect line itself is identical to a
+            # voluntary leave, so the intent — registered before the command was
+            # sent — is the only signal. Its duration is still exact.
+            reason = END_OBSERVED
+            if self._kicks is not None and self._kicks.satisfy(event.xuid) is not None:
+                reason = END_KICKED
+            self._store.close_session(event.xuid, now, reason)
