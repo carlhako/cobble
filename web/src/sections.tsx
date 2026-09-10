@@ -5,6 +5,7 @@ import { UpdatesBackups } from "./sections/UpdatesBackups";
 import { Configuration } from "./sections/Configuration";
 import { Gamerules } from "./sections/Gamerules";
 import { Players } from "./sections/Players";
+import { ImportWorld } from "./sections/ImportWorld";
 
 export interface Section {
   path: string;
@@ -22,4 +23,5 @@ export const sections: Section[] = [
   { path: "/configuration", label: "Configuration", element: <Configuration /> },
   { path: "/gamerules", label: "Gamerules", element: <Gamerules /> },
   { path: "/players", label: "Players", element: <Players /> },
+  { path: "/import", label: "Import World", element: <ImportWorld /> },
 ];

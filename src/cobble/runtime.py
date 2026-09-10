@@ -49,6 +49,7 @@ from cobble.settings import Settings
 from cobble.status.tracker import StatusTracker
 from cobble.supervisor.supervisor import Supervisor
 from cobble.update.service import UpdateService
+from cobble.worldimport.service import ImportService
 
 log = get_logger("runtime")
 
@@ -73,6 +74,9 @@ class Runtime:
         self.bootstrap = BootstrapStatus()
         self.backup = BackupService(settings, self.layout, self.supervisor)
         self.update = UpdateService(settings, self.layout, self.supervisor, self.backup)
+        # World import (M7): its constructor sweeps the staging slot so nothing
+        # survives a previous run (world-import spec; design.md D8).
+        self.imports = ImportService(settings, self.layout, self.supervisor, self.backup)
         self.scheduler = Scheduler(settings, self.backup, self.update)
         self.migration = LayoutMigration(settings, self.layout, self.supervisor, self.backup)
         self.console = Console(self.supervisor)
@@ -112,6 +116,8 @@ class Runtime:
             # A completed restore names the world so the next readiness repairs
             # its gamerules rather than adopting the reverted set (design.md D6).
             self.backup.set_on_restored(self.gamerules.mark_restored)
+            # An import repairs gamerules exactly as a restore does (design.md D2).
+            self.imports.set_on_restored(self.gamerules.mark_restored)
 
         # Durable player history (M4). A database that cannot be opened is
         # surfaced and the server still starts (server-players spec); the roster

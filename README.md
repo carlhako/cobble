@@ -209,6 +209,45 @@ already has a record of.
 Gamerule writes are refused while an update, backup, or restore is in progress;
 reads stay available.
 
+### Import World
+
+The **Import World** section brings a world that originated elsewhere onto this
+server from an archive you upload — a world kept by a friend, a world moved off
+Crafty Controller, or a recovery after a host rebuild.
+
+**Archive shapes accepted.** Cobble finds the world by structure, not by an
+assumed path, so it takes any of:
+
+- a full server backup, with the world under `worlds/<Name>/` beside unrelated
+  server files (a Crafty or BDS backup);
+- a zipped world folder, `<Name>/` at the archive root;
+- a `.mcworld` / Realms export, with `level.dat` at the archive root.
+
+An archive containing no Bedrock world, or more than one, is refused. Any
+`server.properties`, `allowlist.json`, or `permissions.json` in the archive is
+reported but never applied — the server keeps its own.
+
+**Upload, then apply.** The upload streams to a single staging slot without
+buffering the archive in memory, so archive size is a disk concern, not a memory
+one. Before committing you see what cobble found — the world's name, size, seed,
+and the Bedrock version it was last opened with — and confirm against that rather
+than a file name. A world newer than the installed server is refused outright (it
+could be damaged by an older server); an older world is imported only after a
+second confirmation, because the installed server upgrades it in place
+irreversibly.
+
+**The import is destructive.** It replaces `data/worlds/<level-name>` — the world
+the server currently loads — in place; `level-name` itself is not changed, so
+backups, gamerule records, and the configuration screen keep pointing at the same
+world. **Immediately before anything is removed, cobble captures and verifies a
+backup of the world being replaced**, exactly as a restore does. That backup is a
+normal restorable entry in Updates & Backups; if an import fails partway, its
+name is shown so you can restore it. The server is stopped cleanly for the swap
+and returned to its previous run state afterwards, and the import will not run
+alongside a backup, restore, or update. Free space for the archive, the extracted
+world, and the safety capture is checked up front, so a shortage is a refusal
+rather than a half-extracted world.
+
 ### Reverting to a pre-M2 (M1) cobble release
 
 An M1 cobble release has no knowledge of `data/`, so reverting after the migration

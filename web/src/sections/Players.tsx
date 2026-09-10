@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStatus } from "../api/StatusContext";
 import { usePlayers } from "../api/usePlayers";
+import { usePlayerSessions } from "../api/usePlayerSessions";
 import { useAccess } from "../api/useAccess";
 import {
   api,
@@ -494,30 +495,23 @@ function PlayerAccessPanel({
 
 export function Players() {
   const { connected, status } = useStatus();
-  const { roster, loading, error } = usePlayers();
+  const { roster, loading, error, reload: reloadRoster } = usePlayers();
   const { access, reload: reloadAccess } = useAccess();
   const [selected, setSelected] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<PlayerSessions | null>(null);
-  const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const {
+    sessions,
+    error: sessionsError,
+    reload: reloadSessions,
+  } = usePlayerSessions(selected);
 
-  useEffect(() => {
-    if (selected === null) {
-      setSessions(null);
-      return;
-    }
-    let cancelled = false;
-    setSessions(null);
-    setSessionsError(null);
-    api
-      .playerSessions(selected)
-      .then((d) => !cancelled && setSessions(d))
-      .catch(
-        (e) => !cancelled && setSessionsError(e instanceof Error ? e.message : String(e)),
-      );
-    return () => {
-      cancelled = true;
-    };
-  }, [selected]);
+  // A moderation action can change every panel at once: the ban record (access),
+  // the roster totals, and — moments later, when the server closes the player's
+  // session — the session history. Refresh all three, none via a page reload.
+  const afterModeration = useCallback(() => {
+    reloadAccess();
+    reloadRoster();
+    reloadSessions();
+  }, [reloadAccess, reloadRoster, reloadSessions]);
 
   const players = [...(roster?.players ?? [])].sort((a, b) =>
     a.last_seen < b.last_seen ? 1 : a.last_seen > b.last_seen ? -1 : 0,
@@ -592,7 +586,7 @@ export function Players() {
           enforced={enforced}
           serverRunning={serverRunning}
           maintenance={maintenance}
-          onDone={reloadAccess}
+          onDone={afterModeration}
         />
       )}
 

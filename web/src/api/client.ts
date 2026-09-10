@@ -97,6 +97,81 @@ export interface RestoreResult {
   error: string | null;
 }
 
+// --- World import (M7) --------------------------------------------
+export interface ImportInspection {
+  world_name: string | null;
+  world_prefix: string;
+  uncompressed_size: number;
+  /** A signed 64-bit value, sent as a string so it survives JSON precision. */
+  seed: string | null;
+  last_opened_version: string | null;
+  extra_server_files: string[];
+}
+
+export interface ImportVersionRelation {
+  installed: string | null;
+  world: string | null;
+  relation: "newer" | "older" | "same" | "unknown";
+  importable: boolean;
+}
+
+export interface ImportView {
+  held: boolean;
+  inspection: ImportInspection | null;
+  refusal: string | null;
+  version: ImportVersionRelation | null;
+  current_world: string;
+  maintenance?: string | null;
+}
+
+export interface ImportOutcome {
+  ok: boolean;
+  at: string;
+  world: string;
+  replaced_capture: string | null;
+  needs_confirmation: boolean;
+  warning: string | null;
+  error: string | null;
+}
+
+/** Streamed archive upload with byte-level progress.
+ *
+ * D10: the shared `request()` wrapper is `fetch`-based and `fetch` cannot report
+ * upload progress (request streaming needs `duplex: 'half'`, unusable across the
+ * targeted browsers). `XMLHttpRequest.upload.onprogress` is the only reliable
+ * byte counter, so this one call deliberately bypasses the wrapper. Every other
+ * import call goes through `request()`. */
+export function uploadWorldArchive(
+  file: File,
+  onProgress: (fraction: number) => void,
+): { promise: Promise<ImportView>; abort: () => void } {
+  const xhr = new XMLHttpRequest();
+  const promise = new Promise<ImportView>((resolve, reject) => {
+    xhr.open("POST", "/api/import/upload");
+    xhr.responseType = "json";
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(e.total ? e.loaded / e.total : 0);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(xhr.response as ImportView);
+      } else {
+        const detail = (xhr.response as { detail?: ApiError | string })?.detail;
+        if (detail && typeof detail === "object") {
+          reject(new ApiCallError(detail.error, detail.detail));
+        } else {
+          reject(new ApiCallError(`http_${xhr.status}`, xhr.statusText || "upload failed"));
+        }
+      }
+    };
+    xhr.onerror = () => reject(new ApiCallError("network_error", "the upload connection failed"));
+    xhr.onabort = () => reject(new ApiCallError("aborted", "the upload was cancelled"));
+    xhr.setRequestHeader("content-type", "application/octet-stream");
+    xhr.send(file);
+  });
+  return { promise, abort: () => xhr.abort() };
+}
+
 export type PropertyType = "bool" | "int" | "float" | "enum" | "string";
 
 export interface PropertySchema {
@@ -396,6 +471,13 @@ export const api = {
       },
     ),
 
+  importGet: () => request<ImportView>("GET", "/import"),
+  importDiscard: () => request<ImportView>("DELETE", "/import"),
+  importApply: (confirmOldVersion = false) =>
+    request<ImportOutcome>("POST", "/import/apply", {
+      confirm_old_version: confirmOldVersion,
+    }),
+
   playerKick: (xuid: string, reason = "") =>
     request<KickResultApi>("POST", `/players/${encodeURIComponent(xuid)}/kick`, {
       reason,
@@ -430,7 +512,7 @@ export interface OnlinePlayer {
 }
 
 export interface MaintenanceInfo {
-  operation: "updating" | "restoring" | "backing_up";
+  operation: "updating" | "restoring" | "backing_up" | "importing";
   step: string | null;
 }
 

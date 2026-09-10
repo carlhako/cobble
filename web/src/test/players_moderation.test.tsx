@@ -392,4 +392,114 @@ describe("Players moderation (M6, section 9)", () => {
       }),
     ).toBeInTheDocument();
   });
+
+  it("reflects a ban-driven session close in the history without a reload or re-select", async () => {
+    const inProgress = {
+      xuid: "alex",
+      gamertag: "Alex",
+      sessions: [
+        {
+          connected_at: "2026-02-02T10:00:00+00:00",
+          spawned_at: "2026-02-02T10:00:05+00:00",
+          disconnected_at: null,
+          duration_seconds: 1200,
+          end_reason: null,
+          in_progress: true,
+          approximate: false,
+        },
+      ],
+    };
+    const kicked = {
+      xuid: "alex",
+      gamertag: "Alex",
+      sessions: [
+        {
+          ...inProgress.sessions[0],
+          disconnected_at: "2026-02-02T10:30:00+00:00",
+          duration_seconds: 1800,
+          end_reason: "kicked",
+          in_progress: false,
+        },
+      ],
+    };
+    const fetchFn = mockFetch({
+      "GET /api/players": [
+        { players: [ALEX], recorded_since: ALEX.first_seen },
+        { players: [{ ...ALEX, online: false }], recorded_since: ALEX.first_seen },
+      ],
+      "GET /api/access": [
+        access(),
+        access(),
+        access({
+          bans: [
+            {
+              xuid: "alex",
+              name: "Alex",
+              reason: "",
+              banned_at: "2026-02-02T10:30:00+00:00",
+              lifted_at: null,
+              active: true,
+            },
+          ],
+        }),
+      ],
+      "GET /api/players/alex/sessions": [inProgress, inProgress, kicked],
+      "POST /api/players/alex/ban": [
+        {
+          body: {
+            xuid: "alex",
+            name: "Alex",
+            needs_confirmation: false,
+            would_exclude: [],
+            steps: ["recorded"],
+            kick: { confirmed: true },
+            identifier_written: true,
+          },
+        },
+      ],
+    });
+    renderApp(<Players />);
+    await primeStatus();
+    const panel = await openAlex();
+
+    const countOf = (url: string) =>
+      fetchFn.mock.calls.filter((c) => c[0] === url).length;
+
+    const history = await screen.findByTestId("session-history");
+    expect(within(history).getByText("in progress")).toBeInTheDocument();
+
+    const before = {
+      players: countOf("/api/players"),
+      access: countOf("/api/access"),
+      sessions: countOf("/api/players/alex/sessions"),
+    };
+
+    // Completing the ban refreshes all three feeds without an operator reload.
+    await userEvent.click(within(panel).getByRole("button", { name: "Ban" }));
+    await within(await screen.findByTestId("player-access")).findByRole("button", {
+      name: "Unban",
+    });
+    await waitFor(() => {
+      expect(countOf("/api/players")).toBeGreaterThan(before.players);
+      expect(countOf("/api/access")).toBeGreaterThan(before.access);
+      expect(countOf("/api/players/alex/sessions")).toBeGreaterThan(before.sessions);
+    });
+
+    // The server closes Alex's session shortly after; that arrives as a status
+    // tick (Alex drops offline, the ban count rises), and the still-open session
+    // in the panel flips to "kicked" on its own.
+    pushStatus({
+      ...BASE_STATUS,
+      online_players: [],
+      access: { ...BASE_STATUS.access, ban_count: 1 },
+    });
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId("session-history")).getByText("kicked"),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      within(screen.getByTestId("session-history")).queryByText("in progress"),
+    ).toBeNull();
+  });
 });
