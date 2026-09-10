@@ -52,7 +52,8 @@ def sessions_raw() -> list[list]:
     _, out = sh(
         'python3 -c "import sqlite3,json; '
         f"print(json.dumps([list(r) for r in sqlite3.connect('{DB}').execute("
-        "'SELECT id,xuid,gamertag,connected_at,spawned_at,disconnected_at,end_reason,last_active_at "
+        "'SELECT id,xuid,gamertag,connected_at,spawned_at,disconnected_at,end_reason,"
+        "last_active_at "
         'FROM sessions ORDER BY id\')]))"'
     )
     return last_json_line(out)
@@ -129,7 +130,7 @@ def task_83(check: Checks) -> None:
     time.sleep(2)
     rows = sessions_raw()
     check("a session was recorded for the join", len(rows) == base + 1)
-    sid, xuid, _gt, _conn, spawned, disc, reason, _la = rows[-1]
+    _sid, xuid, _gt, _conn, spawned, disc, reason, _la = rows[-1]
     check("session has a real numeric xuid", str(xuid).isdigit())
     check("world entry (spawn) was recorded", spawned is not None)
     check("session closed as end_reason='observed'", reason == "observed")
@@ -261,7 +262,7 @@ rm -rf /tmp/cobble-live-scratch
     for line in out.strip().splitlines():
         print("   ", line)
     check("archive database passes PRAGMA integrity_check", "integrity: ok" in out)
-    wal = next((l for l in out.splitlines() if l.rstrip().endswith("cobble.db-wal")), "")
+    wal = next((ln for ln in out.splitlines() if ln.rstrip().endswith("cobble.db-wal")), "")
     wal_size = int(wal.split()[4]) if len(wal.split()) >= 5 else -1
     check(f"WAL sidecar in the archive is empty (size={wal_size})", wal_size == 0)
     m = re.search(r"SESSIONS:(\[.*\])", out)
@@ -279,7 +280,9 @@ TASKS = {"83": task_83, "84": task_84, "85": task_85}
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--only", help="comma-separated subset: 83,84,85")
     ap.add_argument("--wipe", action="store_true", help="clear player history before running")
     args = ap.parse_args()

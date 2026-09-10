@@ -49,7 +49,9 @@ def sh(cmd: str, *, root: bool = False, timeout: int = 240) -> tuple[int, str]:
     try:
         import pexpect
     except ImportError as e:  # pragma: no cover
-        raise SystemExit("the 'pexpect' package is required for root steps: pip install pexpect") from e
+        raise SystemExit(
+            "the 'pexpect' package is required for root steps: pip install pexpect"
+        ) from e
 
     name = f"/tmp/.cobble-live-{uuid.uuid4().hex}.sh"
     b64 = base64.b64encode(cmd.encode()).decode()
