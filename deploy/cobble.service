@@ -34,6 +34,13 @@ TimeoutStopSec=180
 KillMode=mixed
 KillSignal=SIGTERM
 
+# cobble serves the web UI on port 80 (COBBLE_PORT). Ports below 1024 are
+# privileged, and cobble runs as an unprivileged user, so grant just the
+# capability to bind one — nothing else. Ambient capabilities are applied by
+# systemd before exec, so NoNewPrivileges=true below does not block this.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
 # Hardening — cobble needs write access only to its own state, the Bedrock
 # tree, and the backup path.
 NoNewPrivileges=true

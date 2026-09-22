@@ -111,4 +111,4 @@ systemctl enable cobble.service
 systemctl restart cobble.service
 
 log "done. cobble is starting; on first run it will download the current Bedrock server."
-log "open http://$(hostname -I | awk '{print $1}'):8000/ on the LAN"
+log "open http://$(hostname -I | awk '{print $1}')/ on the LAN"

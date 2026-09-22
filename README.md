@@ -45,7 +45,7 @@ A fresh install sets `allow-list=false` in `server.properties` so the server is
 joinable on the LAN immediately. Turn the allowlist on from the console
 (`allowlist on` after `allowlist add <gamertag>`) if you want to restrict it.
 
-Open `http://<container-ip>:8000/` in a browser on the LAN.
+Open `http://<container-ip>/` in a browser on the LAN.
 
 ## Filesystem layout
 
@@ -91,7 +91,7 @@ Cobble runs with no config file present.
 | `COBBLE_READINESS_TIMEOUT` | `120` | Seconds to wait for the startup-complete line. |
 | `COBBLE_CRASH_RESTART_THRESHOLD` | `3` | Crashes in the window after which auto-restart is abandoned. `0` disables it. |
 | `COBBLE_CRASH_RESTART_WINDOW` | `300` | Sliding window in seconds for the threshold. |
-| `COBBLE_PORT` | `8000` | HTTP port. |
+| `COBBLE_PORT` | `80` | HTTP port. Ports below 1024 are privileged; the shipped unit grants `CAP_NET_BIND_SERVICE` so cobble binds 80 as an unprivileged user. |
 | `COBBLE_MAINTENANCE_TIME` | `04:00` | Local `HH:MM` for the nightly window (scheduled backup, then update check — one server stop). Empty string disables all scheduled work; on-demand backup/update still work. |
 | `COBBLE_BACKUP_ENABLED` | `true` | Include a backup in the nightly window. |
 | `COBBLE_UPDATE_ENABLED` | `true` | Include an update check (and automatic apply) in the nightly window. |
@@ -281,7 +281,11 @@ npm --prefix web run test
 npm --prefix web run build     # emits src/cobble/static/
 
 # run locally (serves API; UI too if you ran the build)
-python -m cobble
+# cobble defaults to port 80, which needs root off the installed unit — pick an
+# unprivileged port for local work, and give `npm run dev` the same one so its
+# proxy finds the backend.
+COBBLE_PORT=8000 python -m cobble
+COBBLE_PORT=8000 npm --prefix web run dev
 ```
 
 ## License

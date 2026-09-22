@@ -20,7 +20,7 @@ and backup/restore consistency.
 ## One-time setup
 
 1. **A target box** running the cobble build under test, reachable at
-   `localhost:8000` on that box, with a real Bedrock server it can start.
+   `localhost` on that box, with a real Bedrock server it can start.
    Key-based SSH from your machine to a login user there. `su`-to-root for the
    steps that restart the service / read `/backup`.
 

@@ -105,7 +105,17 @@ class Settings(BaseSettings):
 
     # --- Networking -----------------------------------------------------
     host: str = Field(default="0.0.0.0", description="Address the HTTP service binds to.")
-    port: int = Field(default=8000, ge=1, le=65535, description="Port the HTTP service binds to.")
+    port: int = Field(
+        default=80,
+        ge=1,
+        le=65535,
+        description=(
+            "Port the HTTP service binds to. Ports below 1024 are privileged: the "
+            "shipped systemd unit grants CAP_NET_BIND_SERVICE so cobble can bind 80 "
+            "as an unprivileged user. Running outside that unit, either bind a port "
+            "above 1024 or grant the same capability."
+        ),
+    )
 
     # --- Acquisition --------------------------------------------------
     user_agent: str = Field(

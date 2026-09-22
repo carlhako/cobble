@@ -13,7 +13,7 @@ client (tests/live/bot) to exercise the three things unit tests can't:
 
 Prerequisites:
   * env: COBBLE_LIVE_HOST, COBBLE_LIVE_ROOT_PW (+ COBBLE_LIVE_SSH_USER if not $USER)
-  * key-based SSH to that host; cobble reachable at localhost:8000 on it
+  * key-based SSH to that host; cobble reachable at localhost on it
   * `npm ci` in tests/live/bot, then one interactive `node bot.js` run to complete
     the Microsoft device-code sign-in (token caches outside this repo)
   * `pip install pexpect` locally
@@ -44,7 +44,7 @@ CHECKPOINT_S = 20  # override pushed for 8.4 so the test is quick
 
 # -- probes ---------------------------------------------------------
 def api(path: str):
-    _, out = sh(f"curl -s localhost:8000{path}")
+    _, out = sh(f"curl -s localhost{path}")
     return last_json_line(out)
 
 
@@ -147,7 +147,7 @@ def task_83(check: Checks) -> None:
         check("exactly one session open while connected", open_count() == 1)
         sess = api(f"/api/players/{xuid}/sessions")["sessions"]
         check("newest session reads in_progress", sess[0]["in_progress"] is True)
-        sh("curl -s -XPOST localhost:8000/api/server/stop >/dev/null")
+        sh("curl -s -XPOST localhost/api/server/stop >/dev/null")
         time.sleep(4)
     finally:
         proc.kill()
@@ -157,7 +157,7 @@ def task_83(check: Checks) -> None:
     sess = api(f"/api/players/{xuid}/sessions")["sessions"]
     check("that session is not marked approximate", sess[0]["approximate"] is False)
 
-    sh("curl -s -XPOST localhost:8000/api/server/start >/dev/null")
+    sh("curl -s -XPOST localhost/api/server/start >/dev/null")
     wait_running()
 
 
@@ -234,7 +234,7 @@ def task_85(check: Checks) -> None:
     print("== 8.5: backup consistency ==")
     live = sessions_raw()
     check("history is present before the backup", len(live) > 0)
-    _, out = sh("curl -s -XPOST localhost:8000/api/backups")
+    _, out = sh("curl -s -XPOST localhost/api/backups")
     res = last_json_line(out)
     print("   capture ->", res)
     check("backup reported ok", res.get("ok") is True)

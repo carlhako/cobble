@@ -13,7 +13,7 @@ does not originate.
        appears in the operator console
 
 Prerequisites: COBBLE_LIVE_HOST (+ COBBLE_LIVE_ROOT_PW for 7.4's restore path if
-your build guards it), key-based SSH, cobble reachable at localhost:8000 on the
+your build guards it), key-based SSH, cobble reachable at localhost on the
 host, running this cobble build. The script restores every gamerule it changed.
 
 Usage:
@@ -46,7 +46,7 @@ _EXPECTED_RULE_NAMES = {
 
 def post(path: str, body: dict | None = None):
     data = f" -H 'content-type: application/json' -d '{json.dumps(body)}'" if body else ""
-    _, out = sh(f"curl -s -XPOST localhost:8000{path}{data}")
+    _, out = sh(f"curl -s -XPOST localhost{path}{data}")
     return last_json_line(out) if out.strip() else {}
 
 
@@ -63,7 +63,7 @@ def rule_value(view: dict, name: str):
 
 def console_command(cmd: str) -> None:
     sh(
-        "curl -s -XPOST localhost:8000/api/console/command "
+        "curl -s -XPOST localhost/api/console/command "
         f"-H 'content-type: application/json' -d '{json.dumps({'command': cmd})}' >/dev/null"
     )
 
@@ -234,7 +234,7 @@ def task_75(check: Checks) -> None:
     nonce = f"cobblemark{uuid.uuid4().hex[:8]}"
     proc = subprocess.Popen(
         ["ssh", "-o", "StrictHostKeyChecking=no", f"{_ssh_user()}@{HOST}",
-         "timeout 8 curl -sN localhost:8000/api/console/stream"],
+         "timeout 8 curl -sN localhost/api/console/stream"],
         stdout=subprocess.PIPE, text=True,
     )
     time.sleep(1)
