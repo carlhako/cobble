@@ -15,6 +15,29 @@ the console, status, the HTTP interface, the web shell, the install path — plu
 browser), **M4** (the durable player roster) and **M5** (gamerule editing, with
 per-world records and preferred defaults).
 
+![Dashboard](docs/screenshots/dashboard.png)
+
+<details>
+<summary>More screenshots</summary>
+
+**Console** — live server output with a command line.
+
+![Console](docs/screenshots/console.png)
+
+**Updates & Backups** — version status, scheduled updates, and restorable backups.
+
+![Updates & Backups](docs/screenshots/updates.png)
+
+**Configuration** — `server.properties` edited from the browser, with defaults and descriptions.
+
+![Configuration](docs/screenshots/configuration.png)
+
+**Gamerules** — live gamerule editing for the loaded world.
+
+![Gamerules](docs/screenshots/gamerules.png)
+
+</details>
+
 ## Container prerequisites
 
 | Requirement | Value | Why |
@@ -25,21 +48,40 @@ per-world records and preferred defaults).
 | Timezone | **Set explicitly** (`timedatectl set-timezone …`) | An unset zone places later scheduled work (M2's 04:00 update) at an unexpected hour. |
 | Networking | UDP **19132** (IPv4) and **19133** (IPv6) reachable on the LAN | BDS listens on these. Bridged networking needs no port forwarding for LAN-only use. |
 | Backup mount | `/backup` as a bind mount from the Proxmox host (optional, M2) | Cobble treats it as a plain path; NFS/CIFS mounting is a host concern. |
-| Build tools | **None** | The release ships a pre-built wheel (frontend bundle included). The install script needs `python3`, `python3-venv`, `curl`, `unzip` and installs every dependency as a pre-built wheel — no compiler. |
+| Build tools | **None** | The release ships a pre-built wheel (frontend bundle included). The install script installs `python3`, `python3-venv`, `unzip` itself and every Python dependency as a pre-built wheel — no compiler. Only `curl` must be present beforehand, to fetch the script. |
 
 ## Install
 
-On the target container, as root:
+Run everything below **as root** on the target container (log in as root, or
+`su -` first — a fresh Debian LXC has no `sudo`). The install script refuses to run
+as any other user.
+
+A fresh Debian LXC template does not ship `curl`, so install it first:
+
+```
+apt-get update && apt-get install -y curl
+```
+
+Then run the installer:
 
 ```
 curl -fsSL https://github.com/carlhako/cobble/releases/latest/download/install.sh | bash
 ```
 
-The script verifies architecture and glibc, installs `python3`/`curl`/`unzip`,
+The script verifies architecture and glibc, installs `python3`/`python3-venv`/`unzip`,
 fetches the release tarball, creates `/srv/bedrock` and `/var/lib/cobble`, and
-installs and enables `cobble.service`. On first start cobble resolves the current
-BDS version, downloads and extracts it into `/srv/bedrock/versions/<version>/`, and
-points `/srv/bedrock/current` at it.
+installs and enables `cobble.service`.
+
+Root is only needed for the install. The script creates a dedicated system user,
+**`cobble`** (no login shell, home `/var/lib/cobble`), and hands it ownership of
+`/opt/cobble`, `/srv/bedrock`, `/var/lib/cobble` and `/backup` (if `/backup` is a
+bind mount the script can't `chown`, it warns — make it writable by `cobble` on the
+host side). The service runs as that user, so cobble and the Bedrock server it
+spawns never run as root; binding port 80 is granted to the unit through
+`CAP_NET_BIND_SERVICE` alone.
+
+On first start cobble resolves the current BDS version, downloads and extracts it
+into `/srv/bedrock/versions/<version>/`, and points `/srv/bedrock/current` at it.
 
 A fresh install sets `allow-list=false` in `server.properties` so the server is
 joinable on the LAN immediately. Turn the allowlist on from the console

@@ -6,7 +6,7 @@
 # interface + a wheelhouse of every Python dependency), lays out the directory
 # structure, and installs and enables cobble.service.
 #
-# Usage:
+# Usage (as root; a fresh Debian LXC lacks curl — `apt-get install -y curl` first):
 #   curl -fsSL https://github.com/carlhako/cobble/releases/latest/download/install.sh | bash
 #   RELEASE_TAG=v0.1.0 bash install.sh          # pin a version
 #   COBBLE_TARBALL=/path/to/cobble-*.tar.gz bash install.sh   # offline
