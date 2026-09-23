@@ -42,6 +42,8 @@ from cobble.gamerules.service import GameruleService
 from cobble.gamerules.storage import GameruleStorageError
 from cobble.gamerules.storage import open_store as open_gamerule_store
 from cobble.logging import get_logger
+from cobble.maintenance.service import MaintenanceSettingsService
+from cobble.maintenance.settings_store import MaintenanceSettingsStore
 from cobble.players.service import PlayerHistoryService
 from cobble.players.storage import PlayerHistoryError, PlayerStore, open_store
 from cobble.schedule import Scheduler
@@ -72,12 +74,26 @@ class Runtime:
             line_sink=lambda line: self.bus.publish(parse_line(line)),
         )
         self.bootstrap = BootstrapStatus()
-        self.backup = BackupService(settings, self.layout, self.supervisor)
+        # The maintenance-settings overlay (backup retention/enablement and
+        # the two schedules) is shared by the backup service (retention),
+        # the scheduler (both schedules), and the settings API (task 5).
+        self.maintenance_settings = MaintenanceSettingsService(
+            MaintenanceSettingsStore(settings.state_dir / "maintenance_settings.json"), settings
+        )
+        self.backup = BackupService(
+            settings, self.layout, self.supervisor, maintenance_settings=self.maintenance_settings
+        )
         self.update = UpdateService(settings, self.layout, self.supervisor, self.backup)
         # World import (M7): its constructor sweeps the staging slot so nothing
         # survives a previous run (world-import spec; design.md D8).
         self.imports = ImportService(settings, self.layout, self.supervisor, self.backup)
-        self.scheduler = Scheduler(settings, self.backup, self.update)
+        self.scheduler = Scheduler(
+            settings,
+            self.backup,
+            self.update,
+            supervisor=self.supervisor,
+            maintenance_settings=self.maintenance_settings,
+        )
         self.migration = LayoutMigration(settings, self.layout, self.supervisor, self.backup)
         self.console = Console(self.supervisor)
         # Live allowlist-enforcement state, learned by observing the server's

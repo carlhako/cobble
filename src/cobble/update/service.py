@@ -37,6 +37,7 @@ from cobble.logging import get_logger
 from cobble.settings import Settings
 from cobble.supervisor.state import RunState
 from cobble.supervisor.supervisor import Supervisor, SupervisorError
+from cobble.update.history import UpdateHistoryStore
 from cobble.update.records import UpdateRecord, UpdateStateStore
 
 log = get_logger("update.service")
@@ -104,6 +105,7 @@ class UpdateService:
         *,
         resolver: Resolver = try_resolve_current_version,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        history: UpdateHistoryStore | None = None,
     ) -> None:
         self._settings = settings
         self._layout = layout
@@ -112,6 +114,7 @@ class UpdateService:
         self._resolve = resolver
         self._clock = clock
         self._store = UpdateStateStore(settings.state_dir / "updates.json")
+        self._history = history or UpdateHistoryStore(settings.state_dir / "update_history.json")
         self._busy: str | None = None
         # Terminal state: rollback could not restore service. No further
         # automatic action until an operator intervenes (task 6.9).
@@ -161,6 +164,10 @@ class UpdateService:
                 "at": rec.at,
             }
         return None
+
+    def history(self) -> list:
+        """Every successful update, newest first (task 4.3)."""
+        return self._history.list()
 
     def clear_failed(self, version: str | None = None) -> list[str]:
         """Clear the quarantine record for a version (or all). Also lifts the
@@ -259,74 +266,159 @@ class UpdateService:
         previous = installed
         async with self._sup.maintenance_scope("updating") as handle:
             was_running = self._sup.state is RunState.RUNNING
-            handle.set_step(f"stopping {previous or 'server'}")
             if was_running:
+                handle.set_step(f"stopping {previous or 'server'}")
                 await self._sup.maintenance_stop(reason="update")
+            return await self._apply_stopped(handle, previous, new, reason, was_running)
 
-            rec = self._sup.last_shutdown
-            if was_running and rec is not None and not rec.clean:
-                # 6.3 never build a rollback point on a torn world.
-                await self._start(handle, "restarting the previous version")
-                return self._record(
-                    "aborted",
-                    "the pre-update shutdown was unclean; update abandoned",
-                    from_version=previous,
-                    to_version=new,
-                    step="stop",
-                )
+    async def _apply_stopped(
+        self, handle, previous: str | None, new: str, reason: str, was_running: bool
+    ) -> UpdateResult:
+        """The rest of the update pipeline, assuming the server has already
+        been stopped (or was never running) and a maintenance handle is
+        already open. Shared by the standalone path above and the scheduler's
+        coordinated window (task 2.3), so a backup and an update due together
+        stop the server at most once."""
+        rec = self._sup.last_shutdown
+        if was_running and rec is not None and not rec.clean:
+            # 6.3 never build a rollback point on a torn world.
+            await self._start(handle, "restarting the previous version")
+            return self._record(
+                "aborted",
+                "the pre-update shutdown was unclean; update abandoned",
+                from_version=previous,
+                to_version=new,
+                step="stop",
+            )
 
-            handle.set_step("capturing a verified pre-update backup")
-            pre = await self._backup.snapshot_now("pre-update")
-            if not pre.ok:
-                # 6.4
-                await self._start(handle, "restarting the previous version")
-                return self._record(
-                    "aborted",
-                    f"pre-update backup could not be captured or verified: {pre.error}",
-                    from_version=previous,
-                    to_version=new,
-                    step="backup",
-                )
-            pre_archive = pre.archive
-            assert pre_archive is not None
+        handle.set_step("capturing a verified pre-update backup")
+        pre = await self._backup.snapshot_now("pre-update")
+        if not pre.ok:
+            # 6.4
+            await self._start(handle, "restarting the previous version")
+            return self._record(
+                "aborted",
+                f"pre-update backup could not be captured or verified: {pre.error}",
+                from_version=previous,
+                to_version=new,
+                step="backup",
+            )
+        pre_archive = pre.archive
+        assert pre_archive is not None
 
-            handle.set_step(f"activating {new}")
-            self._layout.set_active_version(new)
+        handle.set_step(f"activating {new}")
+        self._layout.set_active_version(new)
 
-            handle.set_step(f"starting {new}")
-            failure: str | None = None
-            failing_step = "readiness"
+        handle.set_step(f"starting {new}")
+        failure: str | None = None
+        failing_step = "readiness"
+        try:
+            await self._sup.maintenance_start()  # 6.5 awaits readiness
+        except SupervisorError as exc:
+            failure = f"the new version did not signal readiness: {exc}"
+        else:
+            # 6.6 post-readiness grace window.
+            handle.set_step(f"watching {new} through the grace window")
             try:
-                await self._sup.maintenance_start()  # 6.5 awaits readiness
-            except SupervisorError as exc:
-                failure = f"the new version did not signal readiness: {exc}"
-            else:
-                # 6.6 post-readiness grace window.
-                handle.set_step(f"watching {new} through the grace window")
-                try:
-                    async with asyncio.timeout(self._settings.update_grace_seconds):
-                        exit_info = await handle.wait_exit()
-                    failure = (
-                        f"the new version exited (code {exit_info.code}) within the "
-                        f"{self._settings.update_grace_seconds:g}s grace window"
-                    )
-                    failing_step = "grace-window"
-                except TimeoutError:
-                    failure = None  # survived the grace window
+                async with asyncio.timeout(self._settings.update_grace_seconds):
+                    exit_info = await handle.wait_exit()
+                failure = (
+                    f"the new version exited (code {exit_info.code}) within the "
+                    f"{self._settings.update_grace_seconds:g}s grace window"
+                )
+                failing_step = "grace-window"
+            except TimeoutError:
+                failure = None  # survived the grace window
 
-            if failure is None:
-                # 6.13 keep the replaced version as the rollback source; prune older.
-                handle.set_step("pruning superseded versions")
-                keep = {new} | ({previous} if previous else set())
-                await asyncio.to_thread(self._layout.prune_versions, keep)
-                return self._record(
-                    "success",
-                    f"updated {previous or '(unknown)'} -> {new}",
-                    from_version=previous,
+        if failure is None:
+            # 6.13 keep the replaced version as the rollback source; prune older.
+            handle.set_step("pruning superseded versions")
+            keep = {new} | ({previous} if previous else set())
+            await asyncio.to_thread(self._layout.prune_versions, keep)
+            return self._record(
+                "success",
+                f"updated {previous or '(unknown)'} -> {new}",
+                from_version=previous,
+                to_version=new,
+                trigger=reason,
+            )
+
+        return await self._rollback(handle, previous, new, pre_archive, failure, failing_step)
+
+    # -- coordinated apply (scheduler task 2.3) ------------------
+    async def apply_coordinated(
+        self, *, handle, was_running: bool, reason: str = "scheduled"
+    ) -> UpdateResult | None:
+        """For the scheduler's coordinated window: the caller has already
+        opened one maintenance scope and stopped the server (if
+        ``was_running``), typically to run a coinciding scheduled backup
+        first. Performs the version check, acquisition, and the
+        already-stopped pipeline without opening a second maintenance scope
+        or a second stop/start (server-backups / server-updates: "the server
+        is not stopped more than once for the pair").
+
+        Returns ``None`` when there is nothing to apply — vendor unreachable,
+        already up to date, or the version is quarantined — in which case the
+        outcome is still recorded but the caller remains responsible for
+        restarting the server. Otherwise returns the terminal
+        :class:`UpdateResult`; by then the server has already been left
+        running (success or rolled back) or deliberately stopped (terminal).
+        """
+        if self._busy is not None:
+            raise UpdateConflictError(f"an {self._busy} operation is already in progress")
+        if self._terminal:
+            self._record(
+                "terminal",
+                "a previous rollback failed to restore service; operator intervention "
+                "is required before further updates",
+            )
+            return None
+        self._busy = "update"
+        try:
+            installed = self._sup.installed_version()
+            resolved = await asyncio.to_thread(self._resolve, self._settings)
+            if resolved is None:
+                self._record(
+                    "aborted",
+                    "vendor source unreachable; no update attempted",
+                    from_version=installed,
+                )
+                return None
+            self._store.set_last_check(available=resolved.version)
+            new = resolved.version
+            if installed and not is_newer(new, installed):
+                self._record("up_to_date", f"installed {installed} is the current release")
+                return None
+            if self._store.is_failed(new):
+                fv = self._store.get_failed(new)
+                step = fv.step if fv else "a previous"
+                self._record(
+                    "skipped",
+                    f"{new} previously failed at the '{step}' step and is not retried "
+                    "automatically",
+                    from_version=installed,
                     to_version=new,
                 )
+                return None
 
-            return await self._rollback(handle, previous, new, pre_archive, failure, failing_step)
+            # The server is already stopped for the coordinated window's
+            # backup leg, so unlike the standalone path there is no
+            # running-server window to preserve during acquisition here.
+            try:
+                await asyncio.to_thread(install_version, resolved, self._layout, self._settings)
+            except InstallError as exc:
+                self._record(
+                    "aborted",
+                    f"acquisition of {new} failed: {exc}",
+                    from_version=installed,
+                    to_version=new,
+                    step="acquire",
+                )
+                return None
+
+            return await self._apply_stopped(handle, installed, new, reason, was_running)
+        finally:
+            self._busy = None
 
     # -- rollback (tasks 6.7-6.9) ------------------------------
     async def _rollback(
@@ -431,6 +523,7 @@ class UpdateService:
         rolled_back: bool = False,
         step: str | None = None,
         output_tail: str = "",
+        trigger: str | None = None,
     ) -> UpdateResult:
         record = UpdateRecord(
             status=status,
@@ -442,6 +535,16 @@ class UpdateService:
             output_tail=output_tail,
         )
         self._store.set_last_result(record)
+        if status == "success":
+            # version-history spec: only a completed, successful update is
+            # logged — up_to_date/skipped/aborted/rolled_back/terminal are not
+            # (task 4.2).
+            self._history.append(
+                at=record.at,
+                from_version=from_version,
+                to_version=to_version,
+                trigger=trigger or "manual",
+            )
         terminal = status == "terminal"
         log.info("update outcome: %s — %s", status, detail)
         return UpdateResult(

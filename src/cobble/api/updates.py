@@ -44,4 +44,8 @@ def build_updates_router(runtime: Runtime) -> APIRouter:
     async def diagnostics() -> dict:
         return {"diagnostics": runtime.update.diagnostics()}
 
+    @router.get("/history", summary="Durable version history, newest first")
+    async def history() -> dict:
+        return {"history": [e.to_dict() for e in runtime.update.history()]}
+
     return router

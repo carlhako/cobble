@@ -28,6 +28,10 @@ def build_backups_router(runtime: Runtime) -> APIRouter:
             "unhealthy": runtime.backup.health,
         }
 
+    @router.get("/history", summary="Durable backup history, newest first")
+    async def history() -> dict:
+        return {"history": [e.to_dict() for e in runtime.backup.history()]}
+
     @router.get("/{archive}", summary="Download a held backup archive")
     async def download(archive: str) -> FileResponse:
         # The name must be a bare filename that resolves to a held backup; a

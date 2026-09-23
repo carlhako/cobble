@@ -119,6 +119,85 @@ async def test_absent_destination_is_surfaced_without_raising(make_supervisor) -
     assert svc.health is not None
 
 
+# -- 1.5 retention via the maintenance-settings overlay ------------
+async def test_retention_is_read_through_maintenance_settings(make_supervisor) -> None:
+    from cobble.maintenance.service import MaintenanceSettingsService
+    from cobble.maintenance.settings_store import MaintenanceSettingsStore
+
+    sup: Supervisor = make_supervisor()
+    store = MaintenanceSettingsStore(sup._settings.state_dir / "maintenance_settings.json")
+    store.set(backup_retention=2)
+    msvc = MaintenanceSettingsService(store, sup._settings)
+    layout = Layout.from_settings(sup._settings)
+    svc = BackupService(sup._settings, layout, sup, maintenance_settings=msvc)
+    assert svc.effective_retention() == 2
+
+    for _ in range(4):
+        await svc.capture(reason="manual")
+    assert len(svc.list_backups()) == 2  # pruned to the overlay's retention, not Settings'
+
+
+# -- 3.2 / 3.3 backup history -----------------------------------------
+async def test_successful_capture_appends_a_history_record(make_supervisor) -> None:
+    sup: Supervisor = make_supervisor()
+    svc = _service(sup)
+    outcome = await svc.capture(reason="manual")
+    assert outcome.ok is True
+
+    history = svc.history()
+    assert len(history) == 1
+    rec = history[0]
+    assert rec.reason == "manual"
+    assert rec.archive == outcome.archive
+    assert rec.size_bytes > 0
+    assert rec.still_held is True
+
+
+async def test_failed_capture_does_not_append_a_history_record(make_supervisor) -> None:
+    sup: Supervisor = make_supervisor()
+    base_layout = Layout.from_settings(sup._settings)
+    stub = base_layout.bedrock_root / "missing-mount"
+    stub.write_text("not a dir")
+    bad_settings = sup._settings.model_copy(update={"backup_dir": stub / "sub"})
+    svc = BackupService(bad_settings, Layout.from_settings(bad_settings), sup)
+
+    outcome = await svc.capture(reason="manual")
+    assert outcome.ok is False
+    assert svc.history() == []
+
+
+async def test_pruned_backup_reads_back_as_not_held_while_the_record_remains(
+    make_supervisor,
+) -> None:
+    from cobble.maintenance.service import MaintenanceSettingsService
+    from cobble.maintenance.settings_store import MaintenanceSettingsStore
+
+    sup: Supervisor = make_supervisor()
+    store = MaintenanceSettingsStore(sup._settings.state_dir / "maintenance_settings.json")
+    store.set(backup_retention=1)
+    msvc = MaintenanceSettingsService(store, sup._settings)
+    layout = Layout.from_settings(sup._settings)
+    svc = BackupService(sup._settings, layout, sup, maintenance_settings=msvc)
+
+    first = await svc.capture(reason="manual")
+    await asyncio.sleep(0.01)
+    second = await svc.capture(reason="manual")
+    assert first.archive != second.archive
+
+    history = svc.history()  # newest first
+    assert len(history) == 2
+    by_archive = {h.archive: h for h in history}
+    assert by_archive[second.archive].still_held is True
+    assert by_archive[first.archive].still_held is False  # pruned by retention=1
+    assert history[0].archive == second.archive  # newest first
+
+
+async def test_history_is_empty_list_when_nothing_captured(make_supervisor) -> None:
+    sup: Supervisor = make_supervisor()
+    svc = _service(sup)
+    assert svc.history() == []
+
+
 async def test_second_capture_while_one_in_progress_is_rejected(make_supervisor) -> None:
     # server-backups: request made while a backup is in progress fails with a
     # distinguishable error.

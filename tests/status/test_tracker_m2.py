@@ -32,11 +32,19 @@ class _FakeUpdate:
 
 
 class _FakeScheduler:
-    def __init__(self, nxt=None):
+    def __init__(self, nxt=None, *, backup_nxt=None, update_nxt=None):
         self._nxt = nxt
+        self._backup_nxt = backup_nxt if backup_nxt is not None else nxt
+        self._update_nxt = update_nxt if update_nxt is not None else nxt
 
     def next_run(self):
         return self._nxt
+
+    def backup_next_run(self):
+        return self._backup_nxt
+
+    def update_next_run(self):
+        return self._update_nxt
 
 
 # -- 9.1 installed + available, unknown before any check ------------
@@ -90,6 +98,23 @@ async def test_update_fields_after_success_failure_and_skip(make_supervisor) -> 
 
     fu.terminal = True
     assert t.snapshot().update.terminal is True
+
+
+# -- 6.1 independent next-run per schedule -------------------
+async def test_backup_and_update_next_scheduled_are_independent(make_supervisor) -> None:
+    from datetime import datetime
+
+    sup: Supervisor = make_supervisor("1.0.0.1", shutdown_timeout=5.0)
+    layout = Layout.from_settings(sup._settings)
+    bs = BackupService(sup._settings, layout, sup)
+    fu = _FakeUpdate()
+    sched = _FakeScheduler(
+        backup_nxt=datetime(2026, 6, 2, 4, 0), update_nxt=datetime(2026, 6, 9, 5, 30)
+    )
+    t = StatusTracker(sup, backup=bs, update=fu, scheduler=sched)
+    snap = t.snapshot()
+    assert snap.backup.next_scheduled_at == "2026-06-02T04:00:00"
+    assert snap.update.next_scheduled_at == "2026-06-09T05:30:00"
 
 
 # -- 9.3 backup activity -----------------------------------

@@ -400,7 +400,9 @@ class ImportService:
                     )
 
                 self._layout.ensure_payload_symlinks()
-                await asyncio.to_thread(self._backup.store.prune, self._settings.backup_retention)
+                await asyncio.to_thread(
+                    self._backup.store.prune, self._backup.effective_retention()
+                )
                 self._note_restored_world(level_name)
                 await self._restore_run_state(handle, was_running)
                 log.info(

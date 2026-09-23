@@ -92,16 +92,31 @@ Cobble runs with no config file present.
 | `COBBLE_CRASH_RESTART_THRESHOLD` | `3` | Crashes in the window after which auto-restart is abandoned. `0` disables it. |
 | `COBBLE_CRASH_RESTART_WINDOW` | `300` | Sliding window in seconds for the threshold. |
 | `COBBLE_PORT` | `80` | HTTP port. Ports below 1024 are privileged; the shipped unit grants `CAP_NET_BIND_SERVICE` so cobble binds 80 as an unprivileged user. |
-| `COBBLE_MAINTENANCE_TIME` | `04:00` | Local `HH:MM` for the nightly window (scheduled backup, then update check — one server stop). Empty string disables all scheduled work; on-demand backup/update still work. |
-| `COBBLE_BACKUP_ENABLED` | `true` | Include a backup in the nightly window. |
-| `COBBLE_UPDATE_ENABLED` | `true` | Include an update check (and automatic apply) in the nightly window. |
-| `COBBLE_BACKUP_RETENTION` | `7` | Backups to keep. Older ones are pruned oldest-first; the most recent usable backup is never pruned. |
+| `COBBLE_MAINTENANCE_TIME` | `04:00` | Local `HH:MM` **first-run seed** for the backup and update-check schedules (see below) — only consulted while no maintenance-settings overlay file exists yet. Empty string seeds both schedules as disabled; on-demand backup/update still work. |
+| `COBBLE_BACKUP_ENABLED` | `true` | First-run seed for whether the backup schedule starts enabled. |
+| `COBBLE_UPDATE_ENABLED` | `true` | First-run seed for whether the update-check schedule starts enabled. |
+| `COBBLE_BACKUP_RETENTION` | `7` | First-run seed for how many backups to keep. Older ones are pruned oldest-first; the most recent usable backup is never pruned. |
 | `COBBLE_UPDATE_GRACE_SECONDS` | `60` | After a new version signals readiness, seconds it must keep running before the update is called a success. An exit inside this window triggers automatic rollback. |
 | `COBBLE_PLAYER_HISTORY_CHECKPOINT_SECONDS` | `300` | How often the last-known-active time of each open player session is refreshed. Bounds the playtime a session can lose if cobble is killed without closing it — that session is closed at its last checkpoint on the next start. A clean stop or an observed exit still closes sessions exactly; this only backstops power loss. |
 
-Set the container timezone explicitly (`timedatectl set-timezone …`) — the nightly
-window runs in local wall-clock time. The resolved next-run time is shown in the
-web interface so a misconfigured zone is visible.
+Set the container timezone explicitly (`timedatectl set-timezone …`) — scheduled
+maintenance runs in local wall-clock time. Each schedule's resolved next-run time
+is shown in the web interface so a misconfigured zone is visible.
+
+**Maintenance settings (backup retention, backup enablement, and the backup and
+update-check schedules) are live-editable from the Settings tab of the Updates &
+Backups screen** (`GET`/`POST /api/maintenance/settings`), and persist to
+`maintenance_settings.json` under `COBBLE_STATE_DIR` — no restart needed, no TOML
+edit required. `COBBLE_MAINTENANCE_TIME` / `COBBLE_BACKUP_ENABLED` /
+`COBBLE_UPDATE_ENABLED` above are consulted only to seed that overlay the first
+time cobble runs after upgrading to this version, reproducing the previous
+single daily window (same time, backup before update check, one server stop)
+until an operator changes something in the Settings tab. Once a setting has been
+saved there, the corresponding `COBBLE_*` value is ignored. The backup and
+update-check schedules are independently configurable (daily/weekly/monthly,
+with a day-of-week or day-of-month selector); when both happen to fall due
+together they still run as a single ordered sequence — backup first — so the
+server is stopped at most once.
 
 ### Editing the Bedrock server configuration
 

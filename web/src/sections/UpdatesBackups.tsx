@@ -4,8 +4,23 @@ import {
   ApiCallError,
   api,
   type BackupEntry,
+  type BackupHistoryEntry,
+  type MaintenanceSettings,
+  type ScheduleConfig,
+  type ScheduleFrequency,
   type UpdateDiagnostics,
+  type VersionHistoryEntry,
 } from "../api/client";
+
+const WEEKDAYS = [
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday",
+];
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -242,6 +257,344 @@ function VersionPanel({ busy }: { busy: boolean }) {
   );
 }
 
+/** Backup history tab: every successful capture ever recorded, independent of
+ *  whether the archive itself has since been pruned. */
+function BackupHistoryTab() {
+  const [items, setItems] = useState<BackupHistoryEntry[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { history } = await api.backupsHistory();
+        if (!cancelled) setItems(history ?? []);
+      } catch (e) {
+        if (!cancelled) setErr(e instanceof ApiCallError ? e.message : String(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (err) return <div className="controls-error">{err}</div>;
+  if (items === null) return <p className="muted">Loading…</p>;
+  if (items.length === 0) return <p className="muted">No backups recorded yet.</p>;
+
+  return (
+    <table className="backup-list">
+      <thead>
+        <tr>
+          <th>Captured</th>
+          <th>Version</th>
+          <th>Size</th>
+          <th>Trigger</th>
+          <th>Archive</th>
+        </tr>
+      </thead>
+      <tbody>
+        {items.map((h, i) => (
+          <tr key={`${h.archive}-${i}`} className={h.still_held ? "" : "is-unusable"}>
+            <td>{fmtTime(h.at)}</td>
+            <td>{h.bedrock_version ?? "—"}</td>
+            <td>{fmtBytes(h.size_bytes)}</td>
+            <td>{h.reason}</td>
+            <td>{h.still_held ? "Held" : "Pruned"}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+/** Version history tab: every successful update ever applied. */
+function VersionHistoryTab() {
+  const [items, setItems] = useState<VersionHistoryEntry[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { history } = await api.updatesHistory();
+        if (!cancelled) setItems(history ?? []);
+      } catch (e) {
+        if (!cancelled) setErr(e instanceof ApiCallError ? e.message : String(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (err) return <div className="controls-error">{err}</div>;
+  if (items === null) return <p className="muted">Loading…</p>;
+  if (items.length === 0) return <p className="muted">No updates recorded yet.</p>;
+
+  return (
+    <table className="backup-list">
+      <thead>
+        <tr>
+          <th>Installed</th>
+          <th>From</th>
+          <th>To</th>
+          <th>Trigger</th>
+        </tr>
+      </thead>
+      <tbody>
+        {items.map((h, i) => (
+          <tr key={`${h.at}-${i}`}>
+            <td>{fmtTime(h.at)}</td>
+            <td>{h.from_version ?? "—"}</td>
+            <td>{h.to_version ?? "—"}</td>
+            <td>{h.trigger}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+/** One time + frequency + conditional day editor, shared by the backup and
+ *  update-check schedules. */
+function ScheduleEditor({
+  label,
+  value,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  value: ScheduleConfig;
+  onChange: (next: ScheduleConfig) => void;
+  disabled: boolean;
+}) {
+  const setFrequency = (frequency: ScheduleFrequency) => {
+    const day = frequency === "weekly" ? 0 : frequency === "monthly" ? 1 : null;
+    onChange({ ...value, frequency, day });
+  };
+
+  return (
+    <fieldset className="schedule-editor" disabled={disabled}>
+      <legend>{label}</legend>
+      <label>
+        Time{" "}
+        <input
+          type="time"
+          value={value.time}
+          onChange={(e) => onChange({ ...value, time: e.target.value })}
+        />
+      </label>
+      <label>
+        Frequency{" "}
+        <select
+          value={value.frequency}
+          onChange={(e) => setFrequency(e.target.value as ScheduleFrequency)}
+        >
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+        </select>
+      </label>
+      {value.frequency === "weekly" && (
+        <label>
+          Day{" "}
+          <select
+            value={value.day ?? 0}
+            onChange={(e) => onChange({ ...value, day: Number(e.target.value) })}
+          >
+            {WEEKDAYS.map((name, idx) => (
+              <option key={name} value={idx}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {value.frequency === "monthly" && (
+        <label>
+          Day of month{" "}
+          <input
+            type="number"
+            min={1}
+            max={31}
+            value={value.day ?? 1}
+            onChange={(e) => onChange({ ...value, day: Number(e.target.value) })}
+          />
+        </label>
+      )}
+    </fieldset>
+  );
+}
+
+/** Settings tab: retention, scheduled-backups on/off, the two schedule
+ *  editors, and the pre-update backup's fixed informational note (no control —
+ *  maintenance-settings spec: "not exposed as a toggle"). */
+function SettingsTab() {
+  const [settings, setSettings] = useState<MaintenanceSettings | null>(null);
+  const [draft, setDraft] = useState<MaintenanceSettings | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const s = await api.maintenanceSettingsRead();
+      setSettings(s);
+      setDraft(s);
+    } catch (e) {
+      setErrors([e instanceof ApiCallError ? e.message : String(e)]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  if (errors.length && !settings)
+    return <div className="controls-error">{errors[0]}</div>;
+  if (!draft) return <p className="muted">Loading…</p>;
+
+  const save = async () => {
+    setSaving(true);
+    setErrors([]);
+    setMsg(null);
+    try {
+      const result = await api.maintenanceSettingsWrite({
+        backup_retention: draft.backup_retention,
+        backup_enabled: draft.backup_enabled,
+        backup_schedule: draft.backup_schedule,
+        update_schedule: draft.update_schedule,
+      });
+      if (!result.ok) {
+        setErrors(result.errors);
+      } else if (result.settings) {
+        setSettings(result.settings);
+        setDraft(result.settings);
+        setMsg("Settings saved.");
+      }
+    } catch (e) {
+      setErrors([e instanceof ApiCallError ? e.message : String(e)]);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const dirty = settings !== null && JSON.stringify(settings) !== JSON.stringify(draft);
+
+  return (
+    <div className="settings-tab">
+      <label className="controls-row">
+        <input
+          type="number"
+          min={1}
+          value={draft.backup_retention}
+          onChange={(e) =>
+            setDraft({ ...draft, backup_retention: Number(e.target.value) })
+          }
+          aria-label="Backup retention"
+          style={{ width: "5rem" }}
+        />
+        <span>backups retained</span>
+      </label>
+
+      <label className="controls-row">
+        <input
+          type="checkbox"
+          checked={draft.backup_enabled}
+          onChange={(e) => setDraft({ ...draft, backup_enabled: e.target.checked })}
+        />
+        <span>Scheduled backups enabled</span>
+      </label>
+
+      <p className="muted">
+        A verified backup is always captured automatically before an update is applied.
+        This safety step cannot be disabled.
+      </p>
+
+      <ScheduleEditor
+        label="Backup schedule"
+        value={draft.backup_schedule}
+        disabled={!draft.backup_enabled}
+        onChange={(backup_schedule) => setDraft({ ...draft, backup_schedule })}
+      />
+      <label className="controls-row">
+        <input
+          type="checkbox"
+          checked={draft.update_schedule.enabled}
+          onChange={(e) =>
+            setDraft({
+              ...draft,
+              update_schedule: { ...draft.update_schedule, enabled: e.target.checked },
+            })
+          }
+        />
+        <span>Scheduled update checks enabled</span>
+      </label>
+      <ScheduleEditor
+        label="Update-check schedule"
+        value={draft.update_schedule}
+        disabled={!draft.update_schedule.enabled}
+        onChange={(update_schedule) => setDraft({ ...draft, update_schedule })}
+      />
+
+      <div className="controls-row">
+        <button className="btn" disabled={saving || !dirty} onClick={() => void save()}>
+          {saving ? "Saving…" : "Save settings"}
+        </button>
+        {dirty && (
+          <button className="link" disabled={saving} onClick={() => setDraft(settings)}>
+            revert
+          </button>
+        )}
+      </div>
+      {msg && <div className="ok">{msg}</div>}
+      {errors.map((e) => (
+        <div key={e} className="controls-error">
+          {e}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+type MaintenanceTab = "history" | "versions" | "settings";
+
+/** Tabbed panel under the version panel: backup history, version history, and
+ *  the live-editable maintenance settings (task 7.2). The existing live
+ *  `BackupsPanel` (capture/restore/download) is untouched and unaffected. */
+function MaintenanceTabsPanel() {
+  const [tab, setTab] = useState<MaintenanceTab>("history");
+  const tabs: { id: MaintenanceTab; label: string }[] = [
+    { id: "history", label: "Backup history" },
+    { id: "versions", label: "Version history" },
+    { id: "settings", label: "Settings" },
+  ];
+
+  return (
+    <div className="panel">
+      <div className="tabs" role="tablist" aria-label="Maintenance">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={tab === t.id}
+            className={`tab${tab === t.id ? " is-active" : ""}`}
+            onClick={() => setTab(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div role="tabpanel">
+        {tab === "history" && <BackupHistoryTab />}
+        {tab === "versions" && <VersionHistoryTab />}
+        {tab === "settings" && <SettingsTab />}
+      </div>
+    </div>
+  );
+}
+
 /** 10.6 + 10.8 — the backup list, a capture action, and a confirmed restore. */
 function BackupsPanel({ busy }: { busy: boolean }) {
   const { status } = useStatus();
@@ -438,6 +791,7 @@ export function UpdatesBackups() {
       <RollbackFailedAlert />
       <FailedUpdateAlert />
       <VersionPanel busy={busy} />
+      <MaintenanceTabsPanel />
       <BackupsPanel busy={busy} />
     </section>
   );

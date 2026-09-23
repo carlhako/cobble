@@ -88,6 +88,23 @@ def test_capture_via_route_produces_a_listable_backup(client: TestClient) -> Non
     assert len(listed) == 1 and listed[0]["restorable"] is True
 
 
+# -- 3.4 backup history route ------------------------------------
+def test_backup_history_is_empty_list_when_none_captured(client: TestClient) -> None:
+    resp = client.get("/api/backups/history")
+    assert resp.status_code == 200
+    assert resp.json() == {"history": []}
+
+
+def test_backup_history_route_lists_a_capture_newest_first(client: TestClient) -> None:
+    client.post("/api/backups")
+    resp = client.get("/api/backups/history")
+    assert resp.status_code == 200
+    history = resp.json()["history"]
+    assert len(history) == 1
+    assert history[0]["reason"] == "manual"
+    assert history[0]["still_held"] is True
+
+
 # -- download a held backup as a single file --------------------
 def test_download_returns_the_archive_bytes(client: TestClient) -> None:
     client.post("/api/backups")
@@ -150,6 +167,13 @@ def test_diagnostics_route_is_null_before_any_failure(client: TestClient) -> Non
     resp = client.get("/api/updates/diagnostics")
     assert resp.status_code == 200
     assert resp.json() == {"diagnostics": None}
+
+
+# -- 4.4 version history route ------------------------------------
+def test_version_history_is_empty_list_when_none_recorded(client: TestClient) -> None:
+    resp = client.get("/api/updates/history")
+    assert resp.status_code == 200
+    assert resp.json() == {"history": []}
 
 
 def test_clear_failed_route_accepts_a_version_and_reports_cleared(client: TestClient) -> None:

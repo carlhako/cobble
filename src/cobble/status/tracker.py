@@ -371,10 +371,16 @@ class StatusTracker:
             changes = []
         return ConfigView(pending=bool(changes), pending_count=len(changes))
 
-    def _next_scheduled(self) -> str | None:
+    def _backup_next_scheduled(self) -> str | None:
         if self._scheduler is None:
             return None
-        nxt = self._scheduler.next_run()
+        nxt = self._scheduler.backup_next_run()
+        return nxt.isoformat() if nxt is not None else None
+
+    def _update_next_scheduled(self) -> str | None:
+        if self._scheduler is None:
+            return None
+        nxt = self._scheduler.update_next_run()
         return nxt.isoformat() if nxt is not None else None
 
     def _version_view(self) -> VersionView | None:
@@ -409,7 +415,7 @@ class StatusTracker:
                     "step": rec.step,
                 }
             ),
-            next_scheduled_at=self._next_scheduled(),
+            next_scheduled_at=self._update_next_scheduled(),
             skipping=(available if available and self._update.is_skipping(available) else None),
             terminal=self._update.terminal,
         )
@@ -425,7 +431,7 @@ class StatusTracker:
         return BackupView(
             last_at=outcome.at if outcome is not None else None,
             last_ok=outcome.ok if outcome is not None else None,
-            next_scheduled_at=self._next_scheduled(),
+            next_scheduled_at=self._backup_next_scheduled(),
             unhealthy=self._backup.health,
             count=count,
         )

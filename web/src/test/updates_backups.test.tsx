@@ -304,3 +304,193 @@ describe("Updates & Backups section", () => {
     expect(screen.getAllByRole("button", { name: "Restore" })).toHaveLength(1);
   });
 });
+
+const SETTINGS_FIXTURE = {
+  backup_retention: 7,
+  backup_enabled: true,
+  backup_schedule: { enabled: true, time: "04:00", frequency: "daily", day: null },
+  update_schedule: { enabled: true, time: "04:00", frequency: "daily", day: null },
+  pre_update_backup_always_on: true,
+};
+
+describe("Maintenance tabs (task 7)", () => {
+  it("7.6 switches between backup history, version history, and settings tabs", async () => {
+    mockFetch({
+      "GET /api/backups": { backups: [], unhealthy: null },
+      "GET /api/backups/history": { history: [] },
+      "GET /api/updates/history": { history: [] },
+      "GET /api/maintenance/settings": SETTINGS_FIXTURE,
+    });
+    renderApp(<UpdatesBackups />);
+    await waitFor(() => expect(FakeEventSource.byUrl("/api/status/stream")).toBeTruthy());
+    push(BASE);
+
+    expect(await screen.findByText("No backups recorded yet.")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("tab", { name: "Version history" }));
+    expect(await screen.findByText("No updates recorded yet.")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    expect(await screen.findByText(/backups retained/)).toBeInTheDocument();
+  });
+
+  it("7.6 renders backup history including a pruned/not-held row", async () => {
+    mockFetch({
+      "GET /api/backups": { backups: [], unhealthy: null },
+      "GET /api/backups/history": {
+        history: [
+          {
+            at: "2026-06-02T04:00:00",
+            reason: "scheduled",
+            bedrock_version: "1.0.0.2",
+            size_bytes: 2048,
+            archive: "cobble-backup-b.tar.gz",
+            still_held: true,
+          },
+          {
+            at: "2026-06-01T04:00:00",
+            reason: "manual",
+            bedrock_version: "1.0.0.1",
+            size_bytes: 1024,
+            archive: "cobble-backup-a.tar.gz",
+            still_held: false,
+          },
+        ],
+      },
+    });
+    renderApp(<UpdatesBackups />);
+    await waitFor(() => expect(FakeEventSource.byUrl("/api/status/stream")).toBeTruthy());
+    push(BASE);
+
+    expect(await screen.findByText("Held")).toBeInTheDocument();
+    expect(screen.getByText("Pruned")).toBeInTheDocument();
+  });
+
+  it("7.6 renders version history rows", async () => {
+    mockFetch({
+      "GET /api/backups": { backups: [], unhealthy: null },
+      "GET /api/backups/history": { history: [] },
+      "GET /api/updates/history": {
+        history: [
+          {
+            at: "2026-06-01T04:05:00",
+            from_version: "1.0.0.1",
+            to_version: "2.0.0.1",
+            trigger: "scheduled",
+          },
+        ],
+      },
+    });
+    renderApp(<UpdatesBackups />);
+    await waitFor(() => expect(FakeEventSource.byUrl("/api/status/stream")).toBeTruthy());
+    push(BASE);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Version history" }));
+    expect(await screen.findByText("1.0.0.1", { selector: "td" })).toBeInTheDocument();
+    expect(screen.getByText("2.0.0.1", { selector: "td" })).toBeInTheDocument();
+    expect(screen.getByText("scheduled")).toBeInTheDocument();
+  });
+
+  it("7.6 settings form reads current values, has no pre-update-backup control, and round-trips a write", async () => {
+    const fetchFn = mockFetch({
+      "GET /api/backups": { backups: [], unhealthy: null },
+      "GET /api/backups/history": { history: [] },
+      "GET /api/maintenance/settings": SETTINGS_FIXTURE,
+      "POST /api/maintenance/settings": {
+        ok: true,
+        errors: [],
+        settings: { ...SETTINGS_FIXTURE, backup_retention: 14 },
+      },
+    });
+    renderApp(<UpdatesBackups />);
+    await waitFor(() => expect(FakeEventSource.byUrl("/api/status/stream")).toBeTruthy());
+    push(BASE);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    const retention = await screen.findByLabelText("Backup retention");
+    expect(retention).toHaveValue(7);
+
+    // the pre-update backup is informational only — no control offered for it
+    expect(
+      screen.getByText(/always captured automatically before an update/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("checkbox", { name: /pre-update/i }),
+    ).not.toBeInTheDocument();
+
+    await userEvent.clear(retention);
+    await userEvent.type(retention, "14");
+    await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
+
+    await waitFor(() =>
+      expect(fetchFn).toHaveBeenCalledWith(
+        "/api/maintenance/settings",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
+  });
+
+  it("7.6 the update-check schedule can be disabled and the write carries enabled=false", async () => {
+    const fetchFn = mockFetch({
+      "GET /api/backups": { backups: [], unhealthy: null },
+      "GET /api/backups/history": { history: [] },
+      "GET /api/maintenance/settings": SETTINGS_FIXTURE,
+      "POST /api/maintenance/settings": {
+        ok: true,
+        errors: [],
+        settings: {
+          ...SETTINGS_FIXTURE,
+          update_schedule: { ...SETTINGS_FIXTURE.update_schedule, enabled: false },
+        },
+      },
+    });
+    renderApp(<UpdatesBackups />);
+    await waitFor(() => expect(FakeEventSource.byUrl("/api/status/stream")).toBeTruthy());
+    push(BASE);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    const toggle = await screen.findByRole("checkbox", {
+      name: "Scheduled update checks enabled",
+    });
+    expect(toggle).toBeChecked();
+    await userEvent.click(toggle);
+    await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
+
+    await waitFor(() => {
+      const call = fetchFn.mock.calls.find(
+        ([url, init]) =>
+          url === "/api/maintenance/settings" && (init as RequestInit)?.method === "POST",
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse((call![1] as RequestInit).body as string);
+      expect(body.changes.update_schedule.enabled).toBe(false);
+    });
+  });
+
+  it("7.6 an invalid write surfaces the returned validation errors inline", async () => {
+    mockFetch({
+      "GET /api/backups": { backups: [], unhealthy: null },
+      "GET /api/backups/history": { history: [] },
+      "GET /api/maintenance/settings": SETTINGS_FIXTURE,
+      "POST /api/maintenance/settings": {
+        ok: false,
+        errors: ["backup_retention must be an integer >= 1"],
+        settings: null,
+      },
+    });
+    renderApp(<UpdatesBackups />);
+    await waitFor(() => expect(FakeEventSource.byUrl("/api/status/stream")).toBeTruthy());
+    push(BASE);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    const retention = await screen.findByLabelText("Backup retention");
+    await userEvent.clear(retention);
+    await userEvent.type(retention, "0");
+    await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
+
+    expect(
+      await screen.findByText("backup_retention must be an integer >= 1"),
+    ).toBeInTheDocument();
+  });
+});

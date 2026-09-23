@@ -21,8 +21,11 @@ from cobble.acquisition.layout import Layout
 from cobble.acquisition.version import is_newer
 from cobble.backup.artifact import CONTENT_DATA, CONTENT_STATE, BackupError, Manifest
 from cobble.backup.capture import capture_archive, verify_archive
+from cobble.backup.records import BackupHistoryStore
 from cobble.backup.store import BackupEntry, BackupStore
 from cobble.logging import get_logger
+from cobble.maintenance.service import MaintenanceSettingsService
+from cobble.maintenance.settings_store import MaintenanceSettingsStore
 from cobble.settings import Settings
 from cobble.supervisor.state import RunState
 from cobble.supervisor.supervisor import Supervisor
@@ -151,6 +154,8 @@ class BackupService:
         *,
         clock=lambda: datetime.now(UTC),
         on_restored: Callable[[str], None] | None = None,
+        maintenance_settings: MaintenanceSettingsService | None = None,
+        history: BackupHistoryStore | None = None,
     ) -> None:
         self._settings = settings
         self._layout = layout
@@ -160,6 +165,15 @@ class BackupService:
         # so the next readiness repairs its gamerules rather than adopting the
         # reverted set (server-gamerules spec; design.md D6).
         self._on_restored = on_restored
+        # Retention is read through the maintenance-settings overlay rather than
+        # ``settings.backup_retention`` directly (task 1.5), so a live-edited
+        # value takes effect without a restart. A caller that does not care
+        # about the overlay (most existing tests) gets a service backed by an
+        # empty store, which is equivalent to reading ``Settings`` directly.
+        self._maintenance_settings = maintenance_settings or MaintenanceSettingsService(
+            MaintenanceSettingsStore(settings.state_dir / "maintenance_settings.json"), settings
+        )
+        self._history = history or BackupHistoryStore(settings.state_dir / "backup_history.json")
         self.store = BackupStore(layout.backup_dir)
         self._busy: str | None = None
         self._health: str | None = None
@@ -179,9 +193,7 @@ class BackupService:
             props = self._layout.data_dir / "server.properties"
             name = ""
             if props.is_file():
-                name = (
-                    PropertiesDocument.load(props).effective().get("level-name") or ""
-                ).strip()
+                name = (PropertiesDocument.load(props).effective().get("level-name") or "").strip()
             self._on_restored(name or "Bedrock level")
         except Exception:
             log.exception("could not record the restored world for gamerules")
@@ -202,6 +214,17 @@ class BackupService:
 
     def list_backups(self) -> list[BackupEntry]:
         return self.store.list()
+
+    def effective_retention(self) -> int:
+        """The number of backups to retain, from the maintenance-settings
+        overlay (falling back to ``Settings.backup_retention`` when
+        unedited) — task 1.5."""
+        return self._maintenance_settings.effective_backup_retention()
+
+    def history(self) -> list:
+        """Every recorded backup, newest first, ``still_held`` computed
+        against the live store (task 3.3)."""
+        return self._history.list(self.store)
 
     # -- capture -----------------------------------------------
     async def capture(self, *, reason: str = "manual") -> BackupOutcome:
@@ -298,10 +321,17 @@ class BackupService:
             (self._layout.backup_dir / (manifest.archive + ".json")).unlink(missing_ok=True)
             return self._record_failure(reason, f"capture failed verification: {exc}")
 
-        await asyncio.to_thread(self.store.prune, self._settings.backup_retention)
+        await asyncio.to_thread(self.store.prune, self.effective_retention())
         self._health = None
         self._last = BackupOutcome(
             ok=True, at=manifest.captured_at, reason=reason, archive=manifest.archive
+        )
+        self._history.append(
+            at=manifest.captured_at,
+            reason=reason,
+            bedrock_version=manifest.bedrock_version,
+            size_bytes=manifest.size_bytes,
+            archive=manifest.archive,
         )
         log.info("backup complete: %s (%s)", manifest.archive, reason)
         return self._last
@@ -428,7 +458,7 @@ class BackupService:
                 )
 
             self._layout.ensure_payload_symlinks()
-            await asyncio.to_thread(self.store.prune, self._settings.backup_retention)
+            await asyncio.to_thread(self.store.prune, self.effective_retention())
             self._note_restored_world()
             await self._restore_run_state(handle, was_running)
             log.info(
@@ -483,6 +513,13 @@ class BackupService:
             self._health = None
             self._last = BackupOutcome(
                 ok=True, at=manifest.captured_at, reason="pre-migration", archive=manifest.archive
+            )
+            self._history.append(
+                at=manifest.captured_at,
+                reason="pre-migration",
+                bedrock_version=manifest.bedrock_version,
+                size_bytes=manifest.size_bytes,
+                archive=manifest.archive,
             )
             log.info("pre-migration backup complete: %s", manifest.archive)
             return self._last

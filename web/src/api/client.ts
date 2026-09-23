@@ -97,6 +97,46 @@ export interface RestoreResult {
   error: string | null;
 }
 
+// --- Backup / version history, maintenance settings -----------------
+export interface BackupHistoryEntry {
+  at: string;
+  reason: string;
+  bedrock_version: string | null;
+  size_bytes: number;
+  archive: string;
+  still_held: boolean;
+}
+
+export interface VersionHistoryEntry {
+  at: string;
+  from_version: string | null;
+  to_version: string | null;
+  trigger: string;
+}
+
+export type ScheduleFrequency = "daily" | "weekly" | "monthly";
+
+export interface ScheduleConfig {
+  enabled: boolean;
+  time: string;
+  frequency: ScheduleFrequency;
+  day: number | null;
+}
+
+export interface MaintenanceSettings {
+  backup_retention: number;
+  backup_enabled: boolean;
+  backup_schedule: ScheduleConfig;
+  update_schedule: ScheduleConfig;
+  pre_update_backup_always_on: boolean;
+}
+
+export interface MaintenanceSettingsWriteResult {
+  ok: boolean;
+  errors: string[];
+  settings: MaintenanceSettings | null;
+}
+
 // --- World import (M7) --------------------------------------------
 export interface ImportInspection {
   world_name: string | null;
@@ -160,11 +200,14 @@ export function uploadWorldArchive(
         if (detail && typeof detail === "object") {
           reject(new ApiCallError(detail.error, detail.detail));
         } else {
-          reject(new ApiCallError(`http_${xhr.status}`, xhr.statusText || "upload failed"));
+          reject(
+            new ApiCallError(`http_${xhr.status}`, xhr.statusText || "upload failed"),
+          );
         }
       }
     };
-    xhr.onerror = () => reject(new ApiCallError("network_error", "the upload connection failed"));
+    xhr.onerror = () =>
+      reject(new ApiCallError("network_error", "the upload connection failed"));
     xhr.onabort = () => reject(new ApiCallError("aborted", "the upload was cancelled"));
     xhr.setRequestHeader("content-type", "application/octet-stream");
     xhr.send(file);
@@ -424,6 +467,18 @@ export const api = {
   /** URL that serves a held backup as a downloadable file (plain GET, no side
    *  effect). Used as an <a href> rather than a fetch so the browser saves it. */
   backupsDownloadUrl: (archive: string) => `/api/backups/${encodeURIComponent(archive)}`,
+  backupsHistory: () =>
+    request<{ history: BackupHistoryEntry[] }>("GET", "/backups/history"),
+
+  updatesHistory: () =>
+    request<{ history: VersionHistoryEntry[] }>("GET", "/updates/history"),
+
+  maintenanceSettingsRead: () =>
+    request<MaintenanceSettings>("GET", "/maintenance/settings"),
+  maintenanceSettingsWrite: (changes: Record<string, unknown>) =>
+    request<MaintenanceSettingsWriteResult>("POST", "/maintenance/settings", {
+      changes,
+    }),
 
   players: () => request<Roster>("GET", "/players"),
   playerSessions: (xuid: string) =>

@@ -26,6 +26,7 @@ def build_api_router(runtime: Runtime) -> APIRouter:
     from cobble.api.gamerules import build_gamerules_router
     from cobble.api.imports import build_imports_router
     from cobble.api.lifecycle import build_lifecycle_router
+    from cobble.api.maintenance import build_maintenance_router
     from cobble.api.players import build_players_router
     from cobble.api.status import build_status_router
     from cobble.api.updates import build_updates_router
@@ -38,6 +39,7 @@ def build_api_router(runtime: Runtime) -> APIRouter:
     router.include_router(build_backups_router(runtime))
     router.include_router(build_imports_router(runtime))
     router.include_router(build_config_router(runtime))
+    router.include_router(build_maintenance_router(runtime))
     router.include_router(build_players_router(runtime))
     router.include_router(build_gamerules_router(runtime))
     router.include_router(build_access_router(runtime))

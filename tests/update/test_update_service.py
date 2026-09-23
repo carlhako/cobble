@@ -321,6 +321,107 @@ async def test_successful_update_prunes_older_versions_but_keeps_rollback_source
     await sup.stop()
 
 
+# -- 4.2 version history --------------------------------------
+async def test_successful_update_appends_a_version_history_record(
+    make_supervisor, _patch_installer
+):
+    sup: Supervisor = make_supervisor("1.0.0.1", shutdown_timeout=5.0)
+    svc = _service(sup)
+    _use_installer(_patch_installer, _installer(_GOOD))
+    await sup.start()
+
+    result = await svc.apply(reason="scheduled")
+    assert result.status == "success"
+    history = svc.history()
+    assert len(history) == 1
+    assert history[0].from_version == "1.0.0.1"
+    assert history[0].to_version == "2.0.0.1"
+    assert history[0].trigger == "scheduled"
+    await sup.stop()
+
+
+async def test_up_to_date_does_not_append_version_history(make_supervisor):
+    sup: Supervisor = make_supervisor("2.0.0.1", shutdown_timeout=5.0)
+    await sup.start()
+    layout = Layout.from_settings(sup._settings)
+    svc = UpdateService(
+        sup._settings,
+        layout,
+        sup,
+        BackupService(sup._settings, layout, sup),
+        resolver=lambda _s: ResolvedVersion("2.0.0.1", "http://vendor/x.zip"),
+    )
+    result = await svc.apply(reason="manual")
+    assert result.status == "up_to_date"
+    assert svc.history() == []
+    await sup.stop()
+
+
+async def test_aborted_update_does_not_append_version_history(make_supervisor, _patch_installer):
+    sup: Supervisor = make_supervisor("1.0.0.1", shutdown_timeout=5.0)
+    await sup.start()
+    layout = Layout.from_settings(sup._settings)
+    svc = UpdateService(
+        sup._settings,
+        layout,
+        sup,
+        BackupService(sup._settings, layout, sup),
+        resolver=lambda _s: None,
+    )
+    result = await svc.apply(reason="scheduled")
+    assert result.status == "aborted"
+    assert svc.history() == []
+    await sup.stop()
+
+
+async def test_rolled_back_update_does_not_append_version_history(
+    make_supervisor, _patch_installer
+):
+    sup: Supervisor = make_supervisor("1.0.0.1", shutdown_timeout=5.0, readiness_timeout=1.0)
+    layout = Layout.from_settings(sup._settings)
+    _seed_world(layout, b"pre-update")
+    svc = _service(sup)
+    _use_installer(_patch_installer, _installer(_NEVER_READY))
+    await sup.start()
+
+    result = await svc.apply(reason="scheduled")
+    assert result.status == "rolled_back"
+    assert svc.history() == []
+    await sup.stop()
+
+
+async def test_terminal_update_does_not_append_version_history(make_supervisor, _patch_installer):
+    sup: Supervisor = make_supervisor("1.0.0.1", shutdown_timeout=5.0, readiness_timeout=1.0)
+    svc = _service(sup)
+
+    def install_broken_new_and_break_previous(resolved, layout, settings):
+        _write_binary(layout.version_dir(resolved.version), _NEVER_READY)
+        _write_binary(layout.version_dir("1.0.0.1"), _NEVER_READY)
+
+    _use_installer(_patch_installer, install_broken_new_and_break_previous)
+    await sup.start()
+
+    result = await svc.apply(reason="scheduled")
+    assert result.status == "terminal"
+    assert svc.history() == []
+
+
+# -- 4.3 read newest-first --------------------------------------
+async def test_history_lists_newest_first(make_supervisor, _patch_installer):
+    sup: Supervisor = make_supervisor("1.0.0.1", shutdown_timeout=5.0)
+    svc = _service(sup, available="2.0.0.1")
+    _use_installer(_patch_installer, _installer(_GOOD))
+    await sup.start()
+    await svc.apply(reason="scheduled")
+
+    svc._resolve = lambda _s: ResolvedVersion("3.0.0.1", "http://vendor/x.zip")
+    await svc.apply(reason="manual")
+
+    history = svc.history()
+    assert [h.to_version for h in history] == ["3.0.0.1", "2.0.0.1"]
+    await sup.stop()
+
+
 # -- 6.14 concurrent guard --------------------------------
 async def test_second_update_while_one_in_progress_is_rejected(make_supervisor, _patch_installer):
     sup: Supervisor = make_supervisor("1.0.0.1", shutdown_timeout=5.0)
