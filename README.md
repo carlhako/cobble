@@ -1,19 +1,14 @@
 # cobble
 
-A supervised web control panel for a Minecraft **Bedrock Dedicated Server** (BDS),
-built for an unprivileged amd64 Debian 13 LXC on Proxmox.
+A web control panel for a Minecraft **Bedrock Dedicated Server**.
 
-Cobble is a single systemd unit. It spawns BDS as a direct child process, owns its
-stdin/stdout pipes, streams the console to a browser over SSE, parses stdout into
-typed events, and exposes start/stop/restart plus live status. The web interface is
-compiled to static assets at build time and served by the same process — no Node
-runtime in the container.
+Start, stop and watch your server from a browser, send console commands, edit
+server settings and gamerules, track players, and get automatic updates and
+backups. It's a single small Python service with only a handful of dependencies
+and no Node or build tools needed on the server.
 
-This repository covers **M1 (foundation)** — process supervision, event parsing,
-the console, status, the HTTP interface, the web shell, the install path — plus
-**M2** (auto-updates and backups), **M3** (editing `server.properties` from the
-browser), **M4** (the durable player roster) and **M5** (gamerule editing, with
-per-world records and preferred defaults).
+Designed for running at home on your LAN in a **Proxmox LXC**, but it runs just as
+well on any **Debian 12 or 13** VM or bare-metal install.
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
@@ -38,25 +33,26 @@ per-world records and preferred defaults).
 
 </details>
 
-## Container prerequisites
+## Requirements
 
 | Requirement | Value | Why |
 |---|---|---|
 | Architecture | **amd64 (x86-64)** | BDS ships no ARM build; cobble refuses to install elsewhere. |
-| OS | Unprivileged **Debian 13** LXC (Debian 12 also works) | glibc ≥ 2.26 required by BDS; Debian 13 = 2.41. |
+| OS | **Debian 12 or 13** — Proxmox LXC (unprivileged is fine), VM, or bare metal | glibc ≥ 2.26 required by BDS; Debian 13 = 2.41. |
 | Memory | ~2 GB RAM | BDS plus a small world; more for larger worlds. |
-| Timezone | **Set explicitly** (`timedatectl set-timezone …`) | An unset zone places later scheduled work (M2's 04:00 update) at an unexpected hour. |
+| Timezone | **Set explicitly** (`timedatectl set-timezone …`) | Scheduled backups and updates run in local time; an unset zone runs them at an unexpected hour. |
 | Networking | UDP **19132** (IPv4) and **19133** (IPv6) reachable on the LAN | BDS listens on these. Bridged networking needs no port forwarding for LAN-only use. |
-| Backup mount | `/backup` as a bind mount from the Proxmox host (optional, M2) | Cobble treats it as a plain path; NFS/CIFS mounting is a host concern. |
+| Backup location | `/backup` — optionally a bind mount from the Proxmox host, or any mounted disk | Cobble treats it as a plain path; NFS/CIFS mounting is up to you. |
 | Build tools | **None** | The release ships a pre-built wheel (frontend bundle included). The install script installs `python3`, `python3-venv`, `unzip` itself and every Python dependency as a pre-built wheel — no compiler. Only `curl` must be present beforehand, to fetch the script. |
 
 ## Install
 
-Run everything below **as root** on the target container (log in as root, or
+Run everything below **as root** on the target machine (log in as root, or
 `su -` first — a fresh Debian LXC has no `sudo`). The install script refuses to run
 as any other user.
 
-A fresh Debian LXC template does not ship `curl`, so install it first:
+A fresh Debian install (including the Proxmox LXC template) may not ship `curl`,
+so install it first:
 
 ```
 apt-get update && apt-get install -y curl
@@ -87,7 +83,7 @@ A fresh install sets `allow-list=false` in `server.properties` so the server is
 joinable on the LAN immediately. Turn the allowlist on from the console
 (`allowlist on` after `allowlist add <gamertag>`) if you want to restrict it.
 
-Open `http://<container-ip>/` in a browser on the LAN.
+Open `http://<server-ip>/` in a browser on the LAN.
 
 ## Filesystem layout
 
@@ -104,19 +100,13 @@ Open `http://<container-ip>/` in a browser on the LAN.
         bedrock_server -> ../current/bedrock_server   vendor payload, symlinked in
         definitions -> ../current/definitions         …and every other payload entry
 /var/lib/cobble/          cobble's own durable state (backed up as a unit)
-/backup/                  backup destination — actively used from M2 (scheduled, pre-update, on demand)
+/backup/                  backup destination (scheduled, pre-update, and on-demand backups)
 ```
 
 The world and the operator-editable config live under `/srv/bedrock/data/`, which
 a version swap never touches. Each version directory holds only files supplied by
 the vendor and can be removed without affecting the world. An update changes only
 the `current` symlink; the `data/` payload symlinks resolve through it.
-
-On first start against a **pre-M2 (M1) installation** — one whose world is still
-inside `versions/<current>/` — cobble performs a one-time migration: it takes a
-verified backup, moves `worlds/` and the config files into `data/`, lays out the
-payload symlinks, and records completion. The migration is safe to interrupt and
-never runs twice.
 
 ## Configuration
 
@@ -141,7 +131,7 @@ Cobble runs with no config file present.
 | `COBBLE_UPDATE_GRACE_SECONDS` | `60` | After a new version signals readiness, seconds it must keep running before the update is called a success. An exit inside this window triggers automatic rollback. |
 | `COBBLE_PLAYER_HISTORY_CHECKPOINT_SECONDS` | `300` | How often the last-known-active time of each open player session is refreshed. Bounds the playtime a session can lose if cobble is killed without closing it — that session is closed at its last checkpoint on the next start. A clean stop or an observed exit still closes sessions exactly; this only backstops power loss. |
 
-Set the container timezone explicitly (`timedatectl set-timezone …`) — scheduled
+Set the server timezone explicitly (`timedatectl set-timezone …`) — scheduled
 maintenance runs in local wall-clock time. Each schedule's resolved next-run time
 is shown in the web interface so a misconfigured zone is visible.
 
@@ -150,10 +140,9 @@ update-check schedules) are live-editable from the Settings tab of the Updates &
 Backups screen** (`GET`/`POST /api/maintenance/settings`), and persist to
 `maintenance_settings.json` under `COBBLE_STATE_DIR` — no restart needed, no TOML
 edit required. `COBBLE_MAINTENANCE_TIME` / `COBBLE_BACKUP_ENABLED` /
-`COBBLE_UPDATE_ENABLED` above are consulted only to seed that overlay the first
-time cobble runs after upgrading to this version, reproducing the previous
-single daily window (same time, backup before update check, one server stop)
-until an operator changes something in the Settings tab. Once a setting has been
+`COBBLE_UPDATE_ENABLED` above are consulted only to seed those settings the first
+time cobble runs (a single daily window: backup, then update check, with one
+server stop). Once a setting has been
 saved there, the corresponding `COBBLE_*` value is ignored. The backup and
 update-check schedules are independently configurable (daily/weekly/monthly,
 with a day-of-week or day-of-month selector); when both happen to fall due
@@ -211,8 +200,8 @@ closed at its last checkpoint (see `COBBLE_PLAYER_HISTORY_CHECKPOINT_SECONDS`) o
 the next start. A session closed that last way is marked, and any total that
 includes one is shown as approximate (`~`) rather than exact.
 
-**History begins when recording begins.** There is no backfill source: an
-installation that ran before this release has no earlier history, and the roster
+**History begins when recording begins.** There is no backfill source: play from
+before cobble was installed is not recorded, and the roster
 shows the date from which history has been recorded so that an absence of early
 data reads as "never collected", not "lost". `cobble.db` is inside the backup set
 by virtue of living in `state_dir`, and a backup checkpoints it before capture so
@@ -304,24 +293,6 @@ and returned to its previous run state afterwards, and the import will not run
 alongside a backup, restore, or update. Free space for the archive, the extracted
 world, and the safety capture is checked up front, so a shortage is a refusal
 rather than a half-extracted world.
-
-### Reverting to a pre-M2 (M1) cobble release
-
-An M1 cobble release has no knowledge of `data/`, so reverting after the migration
-has run needs a manual move back, with the server stopped:
-
-```
-systemctl stop cobble
-cd /srv/bedrock
-mv data/worlds "$(readlink current)/worlds"
-mv data/server.properties data/allowlist.json data/permissions.json "$(readlink current)/"
-rm -rf data
-rm /var/lib/cobble/layout_migration.json
-# then install the M1 release and start it
-```
-
-The pre-migration backup captured in `/backup/` also contains the world in a
-restorable archive if the move cannot be done by hand.
 
 ## Development
 
