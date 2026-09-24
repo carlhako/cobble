@@ -5,7 +5,7 @@ workflow publishes that section as the GitHub release notes, which cobble shows
 on its own page before you upgrade. A tag without a section here is not
 published, so add the entry with the version bump.
 
-## Unreleased
+## 0.7.0 - 2026-09-25
 
 ### What's new
 

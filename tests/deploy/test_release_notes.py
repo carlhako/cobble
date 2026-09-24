@@ -83,7 +83,7 @@ def test_empty_section_fails(changelog: Path) -> None:
 
 
 def test_every_published_version_in_the_repo_changelog_has_notes() -> None:
-    for version in ("0.4.0", "0.5.0", "0.5.1", "0.6.0"):
+    for version in ("0.4.0", "0.5.0", "0.5.1", "0.6.0", "0.7.0"):
         res = _run(version, REPO / "CHANGELOG.md")
         assert res.returncode == 0, res.stderr
         assert res.stdout.strip()
