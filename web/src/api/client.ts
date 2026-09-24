@@ -107,11 +107,30 @@ export interface BackupHistoryEntry {
   still_held: boolean;
 }
 
+/** A setting an update moved from the old Bedrock default to the new one. */
+export interface SettingChange {
+  key: string;
+  from: string;
+  to: string;
+}
+
 export interface VersionHistoryEntry {
   at: string;
   from_version: string | null;
   to_version: string | null;
   trigger: string;
+  settings_changed?: SettingChange[];
+}
+
+/** The transport players connect with, against the one the running Bedrock
+ *  version ships as its default (GET /api/config/transport). */
+export interface TransportView {
+  value: string | null;
+  saved: string | null;
+  recommended: string | null;
+  is_recommended: boolean;
+  running: boolean;
+  pending_restart: boolean;
 }
 
 export type ScheduleFrequency = "daily" | "weekly" | "monthly";
@@ -517,6 +536,7 @@ export const api = {
   configWrite: (changes: Record<string, string>) =>
     request<ConfigWriteResult>("POST", "/config", { changes }),
   configWorlds: () => request<WorldsView>("GET", "/config/worlds"),
+  configTransport: () => request<TransportView>("GET", "/config/transport"),
 
   gamerulesRead: () => request<GameruleView>("GET", "/gamerules"),
   gamerulesWrite: (name: string, value: GameruleValue) =>

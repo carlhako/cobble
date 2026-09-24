@@ -44,6 +44,10 @@ def build_config_router(runtime: Runtime) -> APIRouter:
             raise conflict(getattr(exc, "code", "conflict"), str(exc)) from exc
         return result.to_dict()
 
+    @router.get("/transport", summary="The transport in use against the recommended one")
+    async def transport() -> dict:
+        return runtime.config.transport_view().to_dict()
+
     @router.get("/worlds", summary="List the worlds backing level-name")
     async def worlds() -> dict:
         return runtime.config.worlds().to_dict()

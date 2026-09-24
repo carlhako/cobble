@@ -23,6 +23,8 @@ class VersionHistoryEntry:
     from_version: str | None
     to_version: str | None
     trigger: str  # manual | scheduled
+    # Settings the update moved to the new version's defaults: {key, from, to}.
+    settings_changed: tuple[dict, ...] = ()
 
     def to_dict(self) -> dict:
         return {
@@ -30,7 +32,19 @@ class VersionHistoryEntry:
             "from_version": self.from_version,
             "to_version": self.to_version,
             "trigger": self.trigger,
+            "settings_changed": [dict(c) for c in self.settings_changed],
         }
+
+
+def _settings_changed(raw: object) -> list[dict]:
+    """Well-formed ``{key, from, to}`` entries only; older records have none."""
+    if not isinstance(raw, list):
+        return []
+    return [
+        {"key": str(c["key"]), "from": str(c["from"]), "to": str(c["to"])}
+        for c in raw
+        if isinstance(c, dict) and {"key", "from", "to"} <= c.keys()
+    ]
 
 
 class UpdateHistoryStore:
@@ -55,18 +69,19 @@ class UpdateHistoryStore:
             if not isinstance(item, dict):
                 continue
             try:
-                records.append(
-                    {
-                        "at": str(item["at"]),
-                        "from_version": (
-                            None if item.get("from_version") is None else str(item["from_version"])
-                        ),
-                        "to_version": (
-                            None if item.get("to_version") is None else str(item["to_version"])
-                        ),
-                        "trigger": str(item["trigger"]),
-                    }
-                )
+                record = {
+                    "at": str(item["at"]),
+                    "from_version": (
+                        None if item.get("from_version") is None else str(item["from_version"])
+                    ),
+                    "to_version": (
+                        None if item.get("to_version") is None else str(item["to_version"])
+                    ),
+                    "trigger": str(item["trigger"]),
+                }
+                if changed := _settings_changed(item.get("settings_changed")):
+                    record["settings_changed"] = changed
+                records.append(record)
             except (KeyError, TypeError, ValueError):
                 log.warning("skipping malformed version history record: %r", item)
         return records
@@ -79,11 +94,23 @@ class UpdateHistoryStore:
 
     # -- writes -----------------------------------------------------
     def append(
-        self, *, at: str, from_version: str | None, to_version: str | None, trigger: str
+        self,
+        *,
+        at: str,
+        from_version: str | None,
+        to_version: str | None,
+        trigger: str,
+        settings_changed: list[dict] | None = None,
     ) -> None:
-        self._records.append(
-            {"at": at, "from_version": from_version, "to_version": to_version, "trigger": trigger}
-        )
+        record: dict = {
+            "at": at,
+            "from_version": from_version,
+            "to_version": to_version,
+            "trigger": trigger,
+        }
+        if settings_changed:
+            record["settings_changed"] = settings_changed
+        self._records.append(record)
         self._save()
 
     # -- reads --------------------------------------------------------
@@ -94,6 +121,7 @@ class UpdateHistoryStore:
                 from_version=r["from_version"],
                 to_version=r["to_version"],
                 trigger=r["trigger"],
+                settings_changed=tuple(r.get("settings_changed") or ()),
             )
             for r in self._records
         ]

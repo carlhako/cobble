@@ -9,6 +9,7 @@ clean stop
   unclean -> abort, restart previous  (task 6.3)
 verified pre-update backup
   fails  -> abort, restart previous   (task 6.4)
+carry vendor default changes into server.properties (undone by the rollback's restore)
 activate new version
 start, await readiness within readiness_timeout   (task 6.5)
 grace window: an exit here is a failure            (task 6.6)
@@ -33,6 +34,7 @@ from cobble.acquisition.version import is_newer
 from cobble.acquisition.version_source import ResolvedVersion, try_resolve_current_version
 from cobble.backup.artifact import BackupError
 from cobble.backup.service import BackupService
+from cobble.config.vendor_defaults import DefaultChange, carry_vendor_defaults
 from cobble.logging import get_logger
 from cobble.settings import Settings
 from cobble.supervisor.state import RunState
@@ -306,6 +308,16 @@ class UpdateService:
         pre_archive = pre.archive
         assert pre_archive is not None
 
+        # Settings still at the old version's default follow the new version's
+        # (a flipped vendor default must not strand the server on the old value).
+        # After the backup: a rollback restores data/, config included.
+        handle.set_step("carrying changed Bedrock defaults into server.properties")
+        try:
+            carried = await asyncio.to_thread(carry_vendor_defaults, self._layout, previous, new)
+        except OSError:
+            log.exception("could not carry changed Bedrock defaults; keeping the config as is")
+            carried = []
+
         handle.set_step(f"activating {new}")
         self._layout.set_active_version(new)
 
@@ -335,12 +347,18 @@ class UpdateService:
             handle.set_step("pruning superseded versions")
             keep = {new} | ({previous} if previous else set())
             await asyncio.to_thread(self._layout.prune_versions, keep)
+            detail = f"updated {previous or '(unknown)'} -> {new}"
+            if carried:
+                detail += "; settings moved to the new Bedrock defaults: " + ", ".join(
+                    f"{c.key} {c.old} -> {c.new}" for c in carried
+                )
             return self._record(
                 "success",
-                f"updated {previous or '(unknown)'} -> {new}",
+                detail,
                 from_version=previous,
                 to_version=new,
                 trigger=reason,
+                settings_changed=carried,
             )
 
         return await self._rollback(handle, previous, new, pre_archive, failure, failing_step)
@@ -524,6 +542,7 @@ class UpdateService:
         step: str | None = None,
         output_tail: str = "",
         trigger: str | None = None,
+        settings_changed: list[DefaultChange] | None = None,
     ) -> UpdateResult:
         record = UpdateRecord(
             status=status,
@@ -544,6 +563,7 @@ class UpdateService:
                 from_version=from_version,
                 to_version=to_version,
                 trigger=trigger or "manual",
+                settings_changed=[c.to_dict() for c in settings_changed or []],
             )
         terminal = status == "terminal"
         log.info("update outcome: %s — %s", status, detail)

@@ -229,6 +229,20 @@ Because the Bedrock server reads its configuration only when it starts, cobble S
 - **WHEN** the configuration file changes without any effective value changing
 - **THEN** no settings are reported as pending
 
+### Requirement: The network transport is reported against the version's default
+
+Cobble SHALL report the network transport the server uses (or will use at its next start, while stopped), the saved transport, and the transport the active version ships as its default. A setting absent from the file SHALL be reported as the version's default. When the active version's defaults are not available, no recommendation SHALL be given.
+
+#### Scenario: The server runs a transport other than the version's default
+
+- **WHEN** the running server uses a transport that differs from the active version's default
+- **THEN** it is reported as not the recommended transport, naming the recommended one
+
+#### Scenario: A switch is saved but not yet applied
+
+- **WHEN** the saved transport differs from the one the running server started with
+- **THEN** it is reported as pending until the server restarts
+
 ### Requirement: Configuration writes are refused during maintenance
 
 Because a maintenance operation may replace the server's data wholesale, cobble SHALL reject configuration writes while an update, backup, or restore is in progress.

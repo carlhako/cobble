@@ -16,6 +16,7 @@ from cobble.access.enforcement import Enforcement, EnforcementTracker
 from cobble.acquisition.layout import Layout
 from cobble.config.properties import PropertiesDocument
 from cobble.config.schema import PropertySchema, ValidationIssue, lookup, validate
+from cobble.config.vendor_defaults import vendor_default
 from cobble.logging import get_logger
 from cobble.settings import Settings
 from cobble.supervisor.state import RunState
@@ -35,6 +36,7 @@ __all__ = [
     "EnforcementView",
     "PendingChange",
     "Setting",
+    "TransportView",
     "WorldInfo",
     "WorldsView",
 ]
@@ -105,6 +107,42 @@ class EnforcementView:
             "in_effect": self.in_effect,
             "running": self.running,
             "disagreement": self.disagreement,
+        }
+
+
+@dataclass(frozen=True)
+class TransportView:
+    """The network transport players connect with, against the one the running
+    Bedrock version ships as its default (server-config spec).
+
+    ``value`` is what the running server uses, or what it will use at the next
+    start while stopped. A key absent from the file means BDS's own default,
+    which is ``recommended``. ``recommended`` is ``None`` when the active
+    version's vendor file is not on disk, in which case no advice is given.
+    """
+
+    value: str | None
+    saved: str | None
+    recommended: str | None
+    running: bool
+    pending_restart: bool
+
+    @property
+    def is_recommended(self) -> bool:
+        """Both what runs now and what the next start will use. A saved switch
+        away from the default is flagged before a restart makes it bite."""
+        return self.recommended is None or (
+            self.value == self.recommended and self.saved == self.recommended
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "value": self.value,
+            "saved": self.saved,
+            "recommended": self.recommended,
+            "is_recommended": self.is_recommended,
+            "running": self.running,
+            "pending_restart": self.pending_restart,
         }
 
 
@@ -233,6 +271,25 @@ class ConfigService:
         disagreement = live is not Enforcement.UNKNOWN and (live is Enforcement.ON) != saved
         return EnforcementView(
             saved=saved, in_effect=in_effect, running=True, disagreement=disagreement
+        )
+
+    def transport_view(self) -> TransportView:
+        recommended = vendor_default(self._layout, self._layout.installed_version(), "transport")
+
+        def resolve(raw: str | None) -> str | None:
+            value = (raw or "").strip()
+            return value or recommended  # absent or empty: BDS uses its own default
+
+        saved = resolve(self._document().get("transport"))
+        snapshot = self._sup.config_snapshot
+        running = snapshot is not None
+        value = resolve(snapshot.get("transport")) if running else saved
+        return TransportView(
+            value=value,
+            saved=saved,
+            recommended=recommended,
+            running=running,
+            pending_restart=running and saved != value,
         )
 
     # -- writes -------------------------------------------------

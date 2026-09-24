@@ -351,7 +351,17 @@ function VersionHistoryTab() {
           <tr key={`${h.at}-${i}`}>
             <td>{fmtTime(h.at)}</td>
             <td>{h.from_version ?? "—"}</td>
-            <td>{h.to_version ?? "—"}</td>
+            <td>
+              {h.to_version ?? "—"}
+              {h.settings_changed && h.settings_changed.length > 0 && (
+                <div className="muted settings-changed">
+                  New Bedrock defaults:{" "}
+                  {h.settings_changed
+                    .map((c) => `${c.key} ${c.from} → ${c.to}`)
+                    .join(", ")}
+                </div>
+              )}
+            </td>
             <td>{h.trigger}</td>
           </tr>
         ))}

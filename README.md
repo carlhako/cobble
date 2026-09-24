@@ -42,7 +42,7 @@ well on any **Debian 12 or 13** VM or bare-metal install.
 | OS | **Debian 12 or 13** — Proxmox LXC (unprivileged is fine), VM, or bare metal | glibc ≥ 2.26 required by BDS; Debian 13 = 2.41. |
 | Memory | ~2 GB RAM | BDS plus a small world; more for larger worlds. |
 | Timezone | **Set explicitly** (`timedatectl set-timezone …`) | Scheduled backups and updates run in local time; an unset zone runs them at an unexpected hour. |
-| Networking | UDP **19132** (IPv4) and **19133** (IPv6) reachable on the LAN | BDS listens on these. Bridged networking needs no port forwarding for LAN-only use. |
+| Networking | **TCP 19132** and **UDP 7551** reachable on the LAN, plus UDP from the ephemeral port range (see [Network transport](#network-transport)) | Bedrock 1.26.51.1+ uses the NetherNet transport: a TCP handshake on 19132, LAN discovery on UDP 7551, then a UDP connection per player. Bridged networking on a flat LAN needs no port forwarding. |
 | Backup location | `/backup` — optionally a bind mount from the Proxmox host, or any mounted disk | Cobble treats it as a plain path; NFS/CIFS mounting is up to you. |
 | Build tools | **None** | The release ships a pre-built wheel (frontend bundle included). The install script installs `python3`, `python3-venv`, `unzip` itself and every Python dependency as a pre-built wheel — no compiler. Only `curl` must be present beforehand, to fetch the script. |
 
@@ -224,6 +224,29 @@ field, a value outside an enum) is rejected with a per-setting reason and nothin
 is written; a value of the right type that is merely outside cobble's recommended
 range is saved with a warning. Configuration writes are refused while an update,
 backup, or restore is in progress; reads stay available.
+
+### Network transport
+
+Bedrock **1.26.51.1** changed how players connect. Its default `transport` is
+now `nethernet`: a TCP handshake on `server-port` (19132), followed by a UDP
+connection per player on a port the server picks from the OS's ephemeral range
+(32768–60999 on Debian). LAN discovery answers on UDP 7551. UDP 19132 and 19133
+are no longer used. Current Minecraft clients only support NetherNet. On the
+old `raknet` transport, players may not see the server in their LAN list at
+all. If a firewall sits between players and the server, allow TCP 19132 and
+UDP 7551, and pin the per-player UDP range with `server-udp-ports` (for example
+`server-udp-ports=19140-19160`), then allow that range too.
+
+The **Dashboard** shows the transport the server is using. When that isn't the
+default for the running Bedrock version, a note says so and offers a one-click
+switch and restart. The same note appears on the Configuration page.
+
+When a Bedrock update changes a default, cobble carries the change over. Any
+setting you left at the old version's default moves to the new version's, and
+settings you changed are left alone. The update's entry in **Version history**
+lists what moved. If the update rolls back, the old values come back with the
+world. Installs running cobble v0.5.0 or earlier when they updated to
+1.26.51.1 kept `raknet`. The Dashboard note is how to fix those.
 
 ### Players
 

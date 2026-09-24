@@ -10,6 +10,8 @@ import {
   type ValidationIssue,
   type WorldsView,
 } from "../api/client";
+import { TransportNotice } from "../components/TransportNotice";
+import { useTransport } from "../api/useTransport";
 
 const LEVEL_KEY = "level-name";
 
@@ -309,6 +311,7 @@ export function Configuration() {
   const [savedOnce, setSavedOnce] = useState(false);
   const [filter, setFilter] = useState("");
   const pendingSig = status?.config?.pending_count ?? 0;
+  const transport = useTransport();
 
   const load = useCallback(async () => {
     try {
@@ -407,6 +410,14 @@ export function Configuration() {
           {maintenance.step && <span className="muted"> · {maintenance.step}</span>}
         </div>
       )}
+
+      <TransportNotice
+        view={transport.view}
+        onChanged={async () => {
+          await Promise.all([transport.refresh(), load()]);
+        }}
+        showRestart={false}
+      />
 
       {read && <PendingPanel read={read} running={running} onRestarted={load} />}
 

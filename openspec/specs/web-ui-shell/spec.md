@@ -826,3 +826,23 @@ After an upgrade is requested, the interface SHALL indicate that the upgrade is 
 
 - **WHEN** an upgrade fails and the previous cobble keeps running
 - **THEN** the interface shows the failure and its diagnostic output
+
+### Requirement: The network transport is shown on the dashboard
+
+The dashboard SHALL show the network transport the server is using. When it is not the active Bedrock version's default, the dashboard and the Configuration screen SHALL say so, SHALL state that players may not be able to see or join the server, and SHALL offer to switch to the recommended transport. Once a switch is saved while the server runs, the dashboard SHALL offer the restart that applies it.
+
+#### Scenario: The recommended transport is in use
+
+- **WHEN** the server uses its version's default transport
+- **THEN** the dashboard shows the transport with no notice
+
+#### Scenario: A non-default transport is in use
+
+- **WHEN** the server uses a transport other than its version's default
+- **THEN** the dashboard shows a notice that players may not be able to see or join the server
+- **AND** it offers to switch to the recommended transport
+
+#### Scenario: The switch awaits a restart
+
+- **WHEN** the switch has been saved but the running server still uses the old transport
+- **THEN** the dashboard offers to restart the server to apply it

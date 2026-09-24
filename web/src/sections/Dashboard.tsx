@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useStatus } from "../api/StatusContext";
 import { ServerControls } from "../components/ServerControls";
-import { ApiCallError, api, type RunState } from "../api/client";
+import { TransportNotice } from "../components/TransportNotice";
+import { useTransport } from "../api/useTransport";
+import { ApiCallError, api, type RunState, type TransportView } from "../api/client";
 
 const STATE_LABEL: Record<RunState, string> = {
   stopped: "Stopped",
@@ -89,12 +91,18 @@ function BootstrapNotice({ state, detail }: { state: string; detail: string }) {
   return null;
 }
 
+/** The running transport differs from its version's default. */
+function offDefault(view: TransportView | null): boolean {
+  return !!view?.recommended && view.value !== view.recommended;
+}
+
 export function Dashboard() {
   const { status, stale } = useStatus();
   const run = status?.run_state;
   const uptime = useLiveUptime(status?.uptime_seconds ?? null, run === "running");
   const bootstrapping = status?.bootstrap === "running";
   const maintenance = status?.maintenance ?? null;
+  const transport = useTransport();
 
   return (
     <section className={`section dashboard${stale ? " is-stale" : ""}`}>
@@ -104,7 +112,7 @@ export function Dashboard() {
         <BootstrapNotice state={status.bootstrap} detail={status.bootstrap_detail} />
       )}
 
-      <div className="cards">
+      <div className="cards cards-5">
         <div className="card">
           <div className="card-label">Server</div>
           <div className={`card-value state-${run ?? "unknown"}`}>
@@ -130,7 +138,15 @@ export function Dashboard() {
             )}
           </div>
         </div>
+        <div className="card">
+          <div className="card-label">Transport</div>
+          <div className={`card-value${offDefault(transport.view) ? " warn" : ""}`}>
+            {transport.view?.value ?? "—"}
+          </div>
+        </div>
       </div>
+
+      <TransportNotice view={transport.view} onChanged={transport.refresh} />
 
       {maintenance && (
         <div className="panel is-busy" role="status">

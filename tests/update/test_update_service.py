@@ -441,3 +441,79 @@ async def test_second_update_while_one_in_progress_is_rejected(make_supervisor, 
     assert ei.value.code == "update_in_progress"
     await first
     assert svc.in_progress is None
+
+
+# -- vendor default changes carried across an update ----------------------------
+_OLD_PROPS = "server-name=S\ntransport=raknet\nview-distance=32\n"
+
+
+def _installer_with_props(new_script: str, props: str):
+    def _fake_install(resolved: ResolvedVersion, layout: Layout, settings) -> None:
+        _write_binary(layout.version_dir(resolved.version), new_script)
+        (layout.version_dir(resolved.version) / "server.properties").write_text(props)
+
+    return _fake_install
+
+
+def _seed_props(layout: Layout, operator: str) -> None:
+    (layout.version_dir("1.0.0.1") / "server.properties").write_text(_OLD_PROPS)
+    (layout.data_dir / "server.properties").write_text(operator)
+
+
+async def test_update_moves_settings_left_at_the_old_default_and_records_them(
+    make_supervisor, _patch_installer
+):
+    sup: Supervisor = make_supervisor("1.0.0.1", shutdown_timeout=5.0)
+    layout = Layout.from_settings(sup._settings)
+    # transport was never touched; view-distance was the operator's choice.
+    _seed_props(layout, _OLD_PROPS.replace("view-distance=32", "view-distance=12"))
+    svc = _service(sup)
+    new_props = _OLD_PROPS.replace("raknet", "nethernet").replace("=32", "=24")
+    _use_installer(_patch_installer, _installer_with_props(_GOOD, new_props))
+    await sup.start()
+
+    result = await svc.apply(reason="scheduled")
+
+    assert result.status == "success"
+    assert "transport raknet -> nethernet" in result.detail
+    text = (layout.data_dir / "server.properties").read_text()
+    assert "transport=nethernet" in text and "view-distance=12" in text
+    # The new version was started with the carried value.
+    assert sup.config_snapshot["transport"] == "nethernet"
+    (entry,) = svc.history()
+    assert entry.to_dict()["settings_changed"] == [
+        {"key": "transport", "from": "raknet", "to": "nethernet"}
+    ]
+    await sup.stop()
+
+
+async def test_rollback_restores_the_settings_the_update_carried(make_supervisor, _patch_installer):
+    sup: Supervisor = make_supervisor("1.0.0.1", shutdown_timeout=5.0, readiness_timeout=1.0)
+    layout = Layout.from_settings(sup._settings)
+    _seed_props(layout, _OLD_PROPS)
+    svc = _service(sup)
+    new_props = _OLD_PROPS.replace("raknet", "nethernet")
+    _use_installer(_patch_installer, _installer_with_props(_NEVER_READY, new_props))
+    await sup.start()
+
+    result = await svc.apply(reason="scheduled")
+
+    assert result.status == "rolled_back"
+    assert (layout.data_dir / "server.properties").read_text() == _OLD_PROPS
+    assert svc.history() == []
+    await sup.stop()
+
+
+async def test_version_history_written_before_settings_were_recorded_still_loads(tmp_path):
+    from cobble.update.history import UpdateHistoryStore
+
+    path = tmp_path / "update_history.json"
+    path.write_text(
+        '[{"at": "2026-09-16T04:00:00+00:00", "from_version": "1.26.45.1",'
+        ' "to_version": "1.26.51.1", "trigger": "scheduled"}]'
+    )
+    store = UpdateHistoryStore(path)
+    (entry,) = store.list()
+    assert entry.to_dict()["settings_changed"] == []
+    store.append(at="2026-09-17T04:00:00+00:00", from_version="a", to_version="b", trigger="manual")
+    assert "settings_changed" not in path.read_text()  # only written when there are any

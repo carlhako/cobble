@@ -107,6 +107,26 @@ Cobble SHALL capture a backup after stopping the server and SHALL verify that ba
 - **AND** the previously active version is started again
 - **AND** the failure is recorded and surfaced
 
+### Requirement: An update carries changed vendor defaults into untouched settings
+
+When the version being installed ships a different default for a setting than the version it replaces, cobble SHALL move that setting to the new default if the operator's configuration still holds the old default. It SHALL NOT change a setting the operator set to any other value. It SHALL make the change after the pre-update backup, so a rollback restores the previous values with the world. When the replaced version's defaults are not available, cobble SHALL change nothing.
+
+#### Scenario: A vendor default changed and the operator never touched it
+
+- **WHEN** an update installs a version whose default for a setting differs from the replaced version's, and the operator's value equals the replaced version's default
+- **THEN** the setting is changed to the new version's default before the new version starts
+- **AND** the change is recorded with the update
+
+#### Scenario: The operator chose their own value
+
+- **WHEN** an update installs a version whose default for a setting changed, and the operator's value differs from the replaced version's default
+- **THEN** the operator's value is kept
+
+#### Scenario: The update is rolled back
+
+- **WHEN** an update that changed settings to new defaults is rolled back
+- **THEN** the settings hold their pre-update values again
+
 ### Requirement: An update refuses to proceed from an unclean shutdown
 
 Because state produced by a forcible termination cannot be trusted as a rollback point, cobble SHALL abandon an update when the shutdown preceding it was recorded as unclean.

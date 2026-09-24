@@ -7,6 +7,7 @@ from cobble.config.schema import SCHEMA, PropertyType, lookup, validate
 # Every key in the server.properties BDS 1.26.45.1 ships, captured verbatim from
 # a freshly installed server (task 2.1: every vendor key is in the table). If a
 # newer BDS adds or renames a key, this set and SCHEMA are updated together.
+# 1.26.51.1 ships the same keys (only transport's default changed).
 VENDOR_KEYS = {
     "server-name",
     "gamemode",

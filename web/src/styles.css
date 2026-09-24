@@ -412,9 +412,24 @@ a.version-badge.is-update:hover {
   cursor: not-allowed;
 }
 
+.cards.cards-5 {
+  grid-template-columns: repeat(5, 1fr);
+}
+.card-value.warn {
+  color: var(--warn);
+}
+.transport-notice .controls-row {
+  margin-top: 0.6rem;
+}
+.settings-changed {
+  font-size: 0.8rem;
+  margin-top: 0.2rem;
+}
+
 /* -- responsive: tablet and below -- */
 @media (max-width: 720px) {
-  .cards {
+  .cards,
+  .cards.cards-5 {
     grid-template-columns: repeat(2, 1fr);
   }
   .app-header {

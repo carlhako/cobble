@@ -18,6 +18,11 @@ Cobble SHALL append a record to version history whenever an update completes suc
 - **WHEN** an operator-requested update completes successfully
 - **THEN** a history record is appended noting that it was manually requested
 
+#### Scenario: An update moves settings to new defaults
+
+- **WHEN** a successful update moved settings to the new version's defaults
+- **THEN** its history record lists each setting with its old and new value
+
 ### Requirement: Only successful updates are recorded in history
 
 Version history SHALL record completed, successful updates only. A check that finds no newer version, a failed update, and a rolled-back update SHALL NOT appear there.

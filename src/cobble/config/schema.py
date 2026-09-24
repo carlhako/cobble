@@ -194,7 +194,13 @@ _ENTRIES: tuple[PropertySchema, ...] = (
         "false",
         "Require clients to accept the world's resource packs before joining.",
     ),
-    _s("transport", "raknet", "Network transport the server listens on (e.g. raknet)."),
+    _e(
+        "transport",
+        "nethernet",
+        ("nethernet", "raknet"),
+        "Network protocol players connect with. nethernet is the default from BDS "
+        "1.26.51.1 and the only one current clients support; raknet is the old one.",
+    ),
     _b("content-log-file-enabled", "false", "Write content errors to a log file."),
     _b(
         "content-log-console-output-enabled",
