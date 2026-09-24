@@ -479,4 +479,149 @@ describe("Configuration section", () => {
     await userEvent.clear(box);
     expect(screen.getByLabelText("view-distance")).toBeInTheDocument();
   });
+
+  describe("network-settings", () => {
+    const UNSET_UDP = {
+      key: "server-udp-ports",
+      value: "",
+      recognised: true,
+      present: false,
+      schema: {
+        key: "server-udp-ports",
+        type: "string",
+        default: "",
+        description: "UDP ports for player connections under NetherNet.",
+        members: null,
+        minimum: null,
+        maximum: null,
+      },
+    };
+    const CONFLICT = {
+      key: "server-udp-ports",
+      severity: "warning",
+      message: "server-udp-ports allows 10 UDP ports but max-players is 30.",
+    };
+    const WRITE_OK = {
+      ok: true,
+      errors: [],
+      warnings: [],
+      changed: [],
+      notes: [],
+      pending: [],
+    };
+
+    /** A fetch mock whose `GET /api/config` answer can change after each POST. */
+    function mockConfig(reads: unknown[]) {
+      let n = 0;
+      const fn = vi.fn(async (url: string, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        let body: unknown = {};
+        if (url === "/api/config/worlds") body = WORLDS;
+        else if (url === "/api/config" && method === "GET")
+          body = reads[Math.min(n, reads.length - 1)];
+        else if (url === "/api/config" && method === "POST") {
+          n += 1;
+          body = {
+            ...WRITE_OK,
+            conflicts: (reads[n] as { conflicts: unknown }).conflicts,
+          };
+        }
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      });
+      vi.stubGlobal("fetch", fn);
+      return fn;
+    }
+
+    function posted(fn: ReturnType<typeof vi.fn>): Record<string, string>[] {
+      return fn.mock.calls
+        .filter(([, init]) => (init as RequestInit | undefined)?.method === "POST")
+        .map(([, init]) => JSON.parse((init as RequestInit).body as string).changes);
+    }
+
+    async function open() {
+      renderApp(<Configuration />);
+      await waitFor(() =>
+        expect(FakeEventSource.byUrl("/api/status/stream")).toBeTruthy(),
+      );
+      push(BASE);
+    }
+
+    it("5.2 shows a setting that isn't set with a badge and its default", async () => {
+      mockConfig([{ settings: [...SETTINGS, UNSET_UDP], pending: [], conflicts: [] }]);
+      await open();
+      const input = (await screen.findByLabelText(
+        /^server-udp-ports/,
+      )) as HTMLInputElement;
+      expect(input.value).toBe("");
+      const label = document.querySelector(
+        'label[for="cfg-server-udp-ports"]',
+      ) as HTMLElement;
+      expect(within(label).getByText("not set")).toBeInTheDocument();
+      // Settings in the file carry no badge.
+      const difficulty = document.querySelector(
+        'label[for="cfg-difficulty"]',
+      ) as HTMLElement;
+      expect(within(difficulty).queryByText("not set")).not.toBeInTheDocument();
+    });
+
+    it("5.2 an untouched unset setting is not saved; an edited one is", async () => {
+      const read = { settings: [...SETTINGS, UNSET_UDP], pending: [], conflicts: [] };
+      const fn = mockConfig([read, read, read]);
+      await open();
+      const udp = await screen.findByLabelText(/^server-udp-ports/);
+
+      // Edited then put back to its default: nothing to write for it.
+      await userEvent.type(udp, "1");
+      await userEvent.clear(udp);
+      await userEvent.selectOptions(screen.getByLabelText("difficulty"), "hard");
+      await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+      await waitFor(() => expect(posted(fn)).toHaveLength(1));
+      expect(posted(fn)[0]).toEqual({ difficulty: "hard" });
+
+      await userEvent.type(
+        await screen.findByLabelText(/^server-udp-ports/),
+        "19140-19159",
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+      await waitFor(() => expect(posted(fn)).toHaveLength(2));
+      expect(posted(fn)[1]).toEqual({ "server-udp-ports": "19140-19159" });
+    });
+
+    it("5.3 shows the conflict banner from the read", async () => {
+      mockConfig([{ settings: SETTINGS, pending: [], conflicts: [CONFLICT] }]);
+      await open();
+      const banner = await screen.findByRole("alert", {
+        name: "configuration conflicts",
+      });
+      expect(within(banner).getByText(/allows 10 UDP ports/)).toBeInTheDocument();
+    });
+
+    it("5.3 the banner appears after a save introduces a conflict and clears when one resolves it", async () => {
+      mockConfig([
+        { settings: SETTINGS, pending: [], conflicts: [] },
+        { settings: SETTINGS, pending: [], conflicts: [CONFLICT] },
+        { settings: SETTINGS, pending: [], conflicts: [] },
+      ]);
+      await open();
+      await screen.findByLabelText("difficulty");
+      expect(screen.queryByRole("alert", { name: "configuration conflicts" })).toBeNull();
+
+      await userEvent.selectOptions(screen.getByLabelText("difficulty"), "hard");
+      await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+      expect(
+        await screen.findByRole("alert", { name: "configuration conflicts" }),
+      ).toBeInTheDocument();
+
+      await userEvent.selectOptions(screen.getByLabelText("difficulty"), "normal");
+      await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("alert", { name: "configuration conflicts" }),
+        ).toBeNull(),
+      );
+    });
+  });
 });

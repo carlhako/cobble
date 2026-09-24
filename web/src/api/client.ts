@@ -251,6 +251,9 @@ export interface ConfigSetting {
   value: string;
   recognised: boolean;
   schema: PropertySchema | null;
+  /** False for a recognised setting the file does not assign; `value` is then
+   *  its default. */
+  present: boolean;
 }
 
 export interface PendingChange {
@@ -268,6 +271,9 @@ export interface ValidationIssue {
 export interface ConfigRead {
   settings: ConfigSetting[];
   pending: PendingChange[];
+  /** Settings that are each valid but conflict, e.g. a UDP range smaller than
+   *  max-players. */
+  conflicts: ValidationIssue[];
 }
 
 export interface ConfigWriteResult {
@@ -277,6 +283,50 @@ export interface ConfigWriteResult {
   changed: string[];
   notes: string[];
   pending: PendingChange[];
+  conflicts: ValidationIssue[];
+}
+
+export type NetworkTransport = "nethernet" | "raknet";
+
+export interface NetworkSetting {
+  key: string;
+  value: string;
+  present: boolean;
+  protocol: "tcp" | "udp" | null;
+  label: string;
+}
+
+export interface PortRange {
+  start: number;
+  end: number;
+}
+
+export type UdpRange =
+  | { form: "os" }
+  | { form: "range"; start: number; end: number; size: number }
+  | { form: "custom"; value: string; local: PortRange[]; size: number };
+
+export interface ForwardEntry {
+  protocol: "tcp" | "udp";
+  ports: string;
+  note?: string;
+}
+
+export interface NetworkLayout {
+  settings: NetworkSetting[];
+  udp_range: UdpRange | null;
+  lan_discovery: { protocol: "udp"; port: number } | null;
+  forward: ForwardEntry[];
+  pin_required: boolean;
+}
+
+/** The network view (server-network spec): a layout per transport, built from
+ *  the saved configuration, and the one the next start uses. */
+export interface NetworkView {
+  transport: TransportView;
+  layout: NetworkTransport;
+  layouts: Record<NetworkTransport, NetworkLayout>;
+  conflicts: ValidationIssue[];
 }
 
 export type SessionEndReason =
@@ -540,6 +590,7 @@ export const api = {
     request<ConfigWriteResult>("POST", "/config", { changes }),
   configWorlds: () => request<WorldsView>("GET", "/config/worlds"),
   configTransport: () => request<TransportView>("GET", "/config/transport"),
+  getNetwork: () => request<NetworkView>("GET", "/config/network"),
 
   gamerulesRead: () => request<GameruleView>("GET", "/gamerules"),
   gamerulesWrite: (name: string, value: GameruleValue) =>

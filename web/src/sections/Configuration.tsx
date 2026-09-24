@@ -11,6 +11,8 @@ import {
   type WorldsView,
 } from "../api/client";
 import { TransportNotice } from "../components/TransportNotice";
+import { PendingPanel } from "../components/PendingPanel";
+import { ConflictBanner } from "../components/ConflictBanner";
 import { useTransport } from "../api/useTransport";
 
 const LEVEL_KEY = "level-name";
@@ -85,6 +87,11 @@ function SettingRow({
     <div className={`cfg-row${error ? " has-error" : ""}`}>
       <label htmlFor={id} className="cfg-label">
         {setting.key}
+        {setting.present === false && (
+          <span className="badge" title="Not in server.properties; the default applies">
+            not set
+          </span>
+        )}
         {!setting.recognised && (
           <span className="badge" title="cobble does not recognise this setting">
             not recognised
@@ -212,89 +219,6 @@ function LevelPicker({
   );
 }
 
-/** 7.5 / 7.6 — pending changes and the restart that applies them. */
-function PendingPanel({
-  read,
-  running,
-  onRestarted,
-}: {
-  read: ConfigRead;
-  running: boolean;
-  onRestarted: () => void;
-}) {
-  const [working, setWorking] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [deferred, setDeferred] = useState(false);
-
-  if (read.pending.length === 0) return null;
-
-  const restart = async () => {
-    setWorking(true);
-    setErr(null);
-    try {
-      await api.restart();
-      onRestarted();
-    } catch (e) {
-      setErr(e instanceof ApiCallError ? `${e.code}: ${e.message}` : String(e));
-    } finally {
-      setWorking(false);
-    }
-  };
-
-  return (
-    <div
-      className="panel is-warn"
-      role="status"
-      aria-label="pending configuration changes"
-    >
-      <strong>
-        {read.pending.length} saved setting{read.pending.length === 1 ? "" : "s"} not yet
-        in effect
-      </strong>
-      <p className="muted">
-        The server reads its configuration only when it starts. These changes take effect
-        the next time the server starts for any reason — an operator restart, a crash
-        recovery, or an update.
-      </p>
-      <table className="cfg-pending">
-        <thead>
-          <tr>
-            <th>Setting</th>
-            <th>Saved</th>
-            <th>In effect</th>
-          </tr>
-        </thead>
-        <tbody>
-          {read.pending.map((c) => (
-            <tr key={c.key}>
-              <td>{c.key}</td>
-              <td>{c.saved ?? "(unset)"}</td>
-              <td>{c.in_effect ?? "(unset)"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {running && !deferred && (
-        <div className="controls-row">
-          <button className="btn btn-restart" disabled={working} onClick={restart}>
-            {working ? "Restarting…" : "Restart now to apply"}
-          </button>
-          <button className="btn" disabled={working} onClick={() => setDeferred(true)}>
-            Later
-          </button>
-        </div>
-      )}
-      {running && deferred && (
-        <p className="muted">
-          Deferred. The changes will take effect the next time the server starts for any
-          reason.
-        </p>
-      )}
-      {err && <div className="controls-error">{err}</div>}
-    </div>
-  );
-}
-
 export function Configuration() {
   const { status, stale } = useStatus();
   const maintenance = status?.maintenance ?? null;
@@ -377,7 +301,20 @@ export function Configuration() {
     }
   };
 
-  const save = () => doWrite(edits);
+  // A setting that isn't set is only written once its value is changed, so
+  // saving never adds a key the operator didn't touch.
+  const save = () => {
+    const unset = new Map(
+      (read?.settings ?? [])
+        .filter((s) => s.present === false)
+        .map((s) => [s.key, s.value]),
+    );
+    return doWrite(
+      Object.fromEntries(
+        Object.entries(edits).filter(([k, v]) => !unset.has(k) || unset.get(k) !== v),
+      ),
+    );
+  };
 
   const savingBlocked = maintenance !== null || stale;
 
@@ -395,6 +332,8 @@ export function Configuration() {
   return (
     <section className={`section configuration${stale ? " is-stale" : ""}`}>
       <h1>Configuration</h1>
+
+      <ConflictBanner conflicts={read?.conflicts ?? []} />
 
       {maintenance && (
         <div className="panel is-busy" role="status">
@@ -419,7 +358,9 @@ export function Configuration() {
         showRestart={false}
       />
 
-      {read && <PendingPanel read={read} running={running} onRestarted={load} />}
+      {read && (
+        <PendingPanel pending={read.pending} running={running} onRestarted={load} />
+      )}
 
       {savedOnce && notes.length > 0 && (
         <div className="panel is-warn" role="status">

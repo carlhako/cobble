@@ -116,3 +116,23 @@ def test_int_key_still_rejects_a_decimal() -> None:
 
 def test_unrecognised_key_is_never_rejected() -> None:
     assert validate("operator-added-key", "whatever") is None
+
+
+def test_a_string_without_a_check_still_accepts_anything() -> None:
+    assert lookup("level-seed").check is None
+    assert validate("level-seed", "19159-19140 :: [not a port]") is None
+
+
+def test_server_udp_ports_is_checked_against_the_vendor_grammar() -> None:
+    bad = validate("server-udp-ports", "19159-19140")
+    assert bad is not None and bad.severity == "error" and bad.key == "server-udp-ports"
+    assert "starts after it ends" in bad.message
+    assert validate("server-udp-ports", "19140-19159") is None
+    assert validate("server-udp-ports", "") is None
+
+
+def test_network_keys_are_recognised_strings_defaulting_to_empty() -> None:
+    for key in ("server-ip", "server-udp-ports"):
+        entry = lookup(key)
+        assert entry is not None and entry.type is PropertyType.STRING
+        assert entry.default == ""

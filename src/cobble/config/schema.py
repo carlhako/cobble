@@ -24,10 +24,14 @@ still in someone's file, survives as an unrecognised text row.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from enum import StrEnum
 
+from cobble.config import udp_ports
+
 __all__ = [
+    "ACCUMULATING",
     "SCHEMA",
     "PropertySchema",
     "PropertyType",
@@ -54,6 +58,8 @@ class PropertySchema:
     members: tuple[str, ...] | None = None  # ENUM only
     minimum: float | None = None  # INT / FLOAT only, inclusive
     maximum: float | None = None  # INT / FLOAT only, inclusive
+    # STRING only: returns a reason when the value is malformed (design.md D2).
+    check: Callable[[str], str | None] | None = field(default=None, compare=False)
 
     def to_dict(self) -> dict:
         return {
@@ -81,8 +87,22 @@ def _b(key: str, default: str, description: str) -> PropertySchema:
     return PropertySchema(key, PropertyType.BOOL, default, description)
 
 
-def _s(key: str, default: str, description: str) -> PropertySchema:
-    return PropertySchema(key, PropertyType.STRING, default, description)
+def _s(
+    key: str,
+    default: str,
+    description: str,
+    *,
+    check: Callable[[str], str | None] | None = None,
+) -> PropertySchema:
+    return PropertySchema(key, PropertyType.STRING, default, description, check=check)
+
+
+def _check_udp_ports(value: str) -> str | None:
+    try:
+        udp_ports.parse(value)
+    except ValueError as exc:
+        return str(exc)
+    return None
 
 
 def _e(key: str, default: str, members: tuple[str, ...], description: str) -> PropertySchema:
@@ -148,8 +168,35 @@ _ENTRIES: tuple[PropertySchema, ...] = (
         "false",
         "Restrict connections to players named in allowlist.json. Cobble ships this off.",
     ),
-    _i("server-port", "19132", "UDP port for IPv4 clients.", minimum=1, maximum=65535),
-    _i("server-portv6", "19133", "UDP port for IPv6 clients.", minimum=1, maximum=65535),
+    _i(
+        "server-port",
+        "19132",
+        "Port players connect to. Under NetherNet: TCP (handshake). Under RakNet: UDP (IPv4).",
+        minimum=1,
+        maximum=65535,
+    ),
+    _i(
+        "server-portv6",
+        "19133",
+        "UDP port for IPv6 players under RakNet. Ignored under NetherNet.",
+        minimum=1,
+        maximum=65535,
+    ),
+    # Not in the vendor file (server-ip ships commented out, server-udp-ports
+    # not at all); both are documented in bedrock_server_how_to.html.
+    _s(
+        "server-ip",
+        "",
+        "Local address to bind to under NetherNet. Empty binds all interfaces. "
+        "Ignored under RakNet.",
+    ),
+    _s(
+        "server-udp-ports",
+        "",
+        "UDP ports for player connections under NetherNet. Empty lets the OS pick. "
+        "Pin a range to forward it for external players.",
+        check=_check_udp_ports,
+    ),
     _b(
         "enable-lan-visibility",
         "true",
@@ -314,6 +361,10 @@ _ENTRIES: tuple[PropertySchema, ...] = (
 
 SCHEMA: dict[str, PropertySchema] = {entry.key: entry for entry in _ENTRIES}
 
+# Keys BDS combines across every line that assigns them, instead of the last
+# assignment winning (design.md D3).
+ACCUMULATING = frozenset({"server-udp-ports"})
+
 
 def lookup(key: str) -> PropertySchema | None:
     """The schema for ``key``, or ``None`` when cobble does not recognise it."""
@@ -362,7 +413,11 @@ def validate(key: str, value: str) -> ValidationIssue | None:
             )
         return None
 
-    return None  # STRING accepts any value
+    if schema.check is not None:
+        reason = schema.check(value)
+        if reason is not None:
+            return ValidationIssue(key, "error", reason)
+    return None  # any other STRING accepts any value
 
 
 def _range_text(low: float | None, high: float | None) -> str:

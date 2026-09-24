@@ -14,8 +14,17 @@ from pathlib import Path
 
 from cobble.access.enforcement import Enforcement, EnforcementTracker
 from cobble.acquisition.layout import Layout
+from cobble.config import consistency
+from cobble.config.network import network_view
 from cobble.config.properties import PropertiesDocument
-from cobble.config.schema import PropertySchema, ValidationIssue, lookup, validate
+from cobble.config.schema import (
+    ACCUMULATING,
+    SCHEMA,
+    PropertySchema,
+    ValidationIssue,
+    lookup,
+    validate,
+)
 from cobble.config.vendor_defaults import vendor_default
 from cobble.logging import get_logger
 from cobble.settings import Settings
@@ -48,12 +57,16 @@ class Setting:
     value: str
     recognised: bool
     schema: PropertySchema | None
+    # False for a recognised key the file does not assign; ``value`` is then
+    # the schema default (design.md D1).
+    present: bool = True
 
     def to_dict(self) -> dict:
         return {
             "key": self.key,
             "value": self.value,
             "recognised": self.recognised,
+            "present": self.present,
             "schema": self.schema.to_dict() if self.schema is not None else None,
         }
 
@@ -154,6 +167,8 @@ class ConfigWriteResult:
     changed: tuple[str, ...]
     notes: tuple[str, ...]
     pending: tuple[PendingChange, ...]
+    # Every conflict in the configuration as saved after this write (design.md D4).
+    conflicts: tuple[ValidationIssue, ...] = ()
 
     def to_dict(self) -> dict:
         return {
@@ -163,7 +178,23 @@ class ConfigWriteResult:
             "changed": list(self.changed),
             "notes": list(self.notes),
             "pending": [c.to_dict() for c in self.pending],
+            "conflicts": [i.to_dict() for i in self.conflicts],
         }
+
+
+def _value(doc: PropertiesDocument, key: str) -> str | None:
+    """The value BDS uses for ``key``: the last assignment, or for an
+    accumulating key every non-empty assignment joined (design.md D3)."""
+    if key in ACCUMULATING and key in doc:
+        return ",".join(v for v in doc.values(key) if v.strip())
+    return doc.get(key)
+
+
+def _effective(doc: PropertiesDocument) -> dict[str, str]:
+    out = doc.effective()
+    for key in ACCUMULATING & out.keys():
+        out[key] = _value(doc, key) or ""
+    return out
 
 
 class ConfigService:
@@ -203,7 +234,9 @@ class ConfigService:
     # -- reads --------------------------------------------------
     def read(self) -> list[Setting]:
         """Every setting present in the file, in file order, deduplicated to the
-        value BDS would use. Recognised settings carry their schema."""
+        value BDS would use, then every recognised setting the file does not
+        assign, as not set with its default. Recognised settings carry their
+        schema. Reading never writes."""
         doc = self._document()
         settings: list[Setting] = []
         for key in doc.keys():
@@ -211,12 +244,29 @@ class ConfigService:
             settings.append(
                 Setting(
                     key=key,
-                    value=doc.get(key) or "",
+                    value=_value(doc, key) or "",
                     recognised=schema is not None,
                     schema=schema,
                 )
             )
+        for key, schema in SCHEMA.items():
+            if key not in doc:
+                settings.append(
+                    Setting(
+                        key=key, value=schema.default, recognised=True, schema=schema, present=False
+                    )
+                )
         return settings
+
+    def conflicts(self) -> list[ValidationIssue]:
+        """Settings in the saved configuration that conflict with one another."""
+        return self._conflicts(self._document())
+
+    def _conflicts(self, doc: PropertiesDocument) -> list[ValidationIssue]:
+        return consistency.consistency(_effective(doc), self._recommended_transport())
+
+    def _recommended_transport(self) -> str | None:
+        return vendor_default(self._layout, self._layout.installed_version(), "transport")
 
     def worlds(self) -> WorldsView:
         current = (self._document().get("level-name") or "").strip() or _DEFAULT_LEVEL_NAME
@@ -274,7 +324,7 @@ class ConfigService:
         )
 
     def transport_view(self) -> TransportView:
-        recommended = vendor_default(self._layout, self._layout.installed_version(), "transport")
+        recommended = self._recommended_transport()
 
         def resolve(raw: str | None) -> str | None:
             value = (raw or "").strip()
@@ -292,6 +342,17 @@ class ConfigService:
             pending_restart=running and saved != value,
         )
 
+    def network(self) -> dict:
+        """The network view (server-network spec): the settings and ports to
+        forward for each transport, and which one the next start uses."""
+        settings = self.read()
+        return network_view(
+            values={s.key: s.value for s in settings},
+            present={s.key for s in settings if s.present},
+            transport=self.transport_view().to_dict(),
+            conflicts=self.conflicts(),
+        )
+
     # -- writes -------------------------------------------------
     def write(self, changes: dict[str, str]) -> ConfigWriteResult:
         """Apply ``changes`` all-or-nothing.
@@ -304,10 +365,25 @@ class ConfigService:
         if self._sup.maintenance is not None:
             raise MaintenanceInProgressError(f"a {self._sup.maintenance} operation is in progress")
 
+        doc = self._document()
+        changes = dict(changes)
         errors: list[ValidationIssue] = []
         warnings: list[ValidationIssue] = []
-        for key, value in changes.items():
+        for key, value in list(changes.items()):
             issue = validate(key, value)
+            if issue is None and key in ACCUMULATING and len(doc.values(key)) > 1:
+                if value == _value(doc, key):
+                    del changes[key]  # already what BDS reads; leave the lines alone
+                    continue
+                # Rewriting one line would not produce the submitted value, and
+                # merging would rewrite the operator's other lines (design.md D3).
+                issue = ValidationIssue(
+                    key,
+                    "error",
+                    f"{key} is assigned on {len(doc.values(key))} lines of "
+                    "server.properties, which BDS combines. Merge them into one line "
+                    "by hand before changing it here.",
+                )
             if issue is None:
                 continue
             (errors if issue.severity == "error" else warnings).append(issue)
@@ -320,10 +396,13 @@ class ConfigService:
                 changed=(),
                 notes=(),
                 pending=tuple(self.pending()),
+                conflicts=tuple(self._conflicts(doc)),
             )
 
-        doc = self._document()
         changed = doc.apply(changes)
+        conflicts = self._conflicts(doc)
+        if consistency.KEYS & changes.keys():
+            warnings.extend(conflicts)
 
         notes: list[str] = []
         if "level-name" in changes:
@@ -359,4 +438,5 @@ class ConfigService:
             changed=tuple(changed),
             notes=tuple(notes),
             pending=tuple(self.pending()),
+            conflicts=tuple(conflicts),
         )

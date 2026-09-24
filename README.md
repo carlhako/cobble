@@ -46,7 +46,7 @@ well on any **Debian 12 or 13** VM or bare-metal install.
 | OS | **Debian 12 or 13** — Proxmox LXC (unprivileged is fine), VM, or bare metal | glibc ≥ 2.26 required by BDS; Debian 13 = 2.41. |
 | Memory | ~2 GB RAM | BDS plus a small world; more for larger worlds. |
 | Timezone | **Set explicitly** (`timedatectl set-timezone …`) | Scheduled backups and updates run in local time; an unset zone runs them at an unexpected hour. |
-| Networking | **TCP 19132** and **UDP 7551** reachable on the LAN, plus UDP from the ephemeral port range (see [Network transport](#network-transport)) | Bedrock 1.26.51.1+ uses the NetherNet transport: a TCP handshake on 19132, LAN discovery on UDP 7551, then a UDP connection per player. Bridged networking on a flat LAN needs no port forwarding. |
+| Networking | **TCP 19132** and **UDP 7551** reachable on the LAN, plus UDP from the ephemeral port range, or the range you pin in the **Network** section (see [Network transport](#network-transport)) | Bedrock 1.26.51.1+ uses the NetherNet transport: a TCP handshake on 19132, LAN discovery on UDP 7551, then a UDP connection per player. Bridged networking on a flat LAN needs no port forwarding. For players outside the LAN, the Network section lists what to forward. |
 | Backup location | `/backup` — optionally a bind mount from the Proxmox host, or any mounted disk | Cobble treats it as a plain path; NFS/CIFS mounting is up to you. |
 | Build tools | **None** | The release ships a pre-built wheel (frontend bundle included). The install script installs `python3`, `python3-venv`, `unzip` itself and every Python dependency as a pre-built wheel — no compiler. Only `curl` must be present beforehand, to fetch the script. |
 
@@ -211,7 +211,10 @@ number, a dropdown — with their documented default and a short description; ke
 cobble does not recognise (an operator-added key, one a newer BDS introduced)
 appear as plain editable text and are never dropped. `level-name` is presented as
 a picker over the worlds under `data/worlds/`, with "create a new world" a
-separate, explicitly confirmed action.
+separate, explicitly confirmed action. Recognised keys missing from the file,
+such as `server-udp-ports`, which the vendor file doesn't ship, are listed as
+**not set** with their default. They are only added to the file when you change
+them.
 
 Saving is always safe and never disturbs a running server: **BDS reads
 `server.properties` only when it starts.** After a save, cobble compares the file
@@ -238,9 +241,27 @@ connection per player on a port the server picks from the OS's ephemeral range
 (32768–60999 on Debian). LAN discovery answers on UDP 7551. UDP 19132 and 19133
 are no longer used. Current Minecraft clients only support NetherNet. On the
 old `raknet` transport, players may not see the server in their LAN list at
-all. If a firewall sits between players and the server, allow TCP 19132 and
-UDP 7551, and pin the per-player UDP range with `server-udp-ports` (for example
-`server-udp-ports=19140-19160`), then allow that range too.
+all.
+
+The **Network** section shows the settings for the transport the next start
+will use, labelled with the protocol each one governs. Under NetherNet these are
+the handshake port (TCP), the bind address, and the player UDP ports, which you
+can leave to the OS or pin to a from–to range. Under RakNet they are the IPv4 and
+IPv6 ports (both UDP). You can switch the transport there too.
+
+The section also lists what to forward on your router to this server's LAN
+address for players outside your network: under NetherNet, TCP on the handshake
+port and UDP on the pinned range. The OS's ephemeral range can't sensibly be
+forwarded, so until you pin a range the section says to pin one first. If a
+firewall sits between players and the server, allow the same ports plus UDP 7551
+for LAN discovery. Each player uses its own UDP port, so pin at least as many
+ports as `max-players`. If the range is smaller, a banner at the top of the
+Network and Configuration sections says so.
+
+A `server-udp-ports` value the from–to form can't show (a NAT mapping with an
+address, or several entries) is shown read-only and left alone when the section
+saves. Edit it in Configuration, which checks it against the grammar in the
+vendor `bedrock_server_how_to.html`.
 
 The **Dashboard** shows the transport the server is using. When that isn't the
 default for the running Bedrock version, a note says so and offers a one-click

@@ -95,3 +95,18 @@ async def test_pending_clears_across_a_restart_via_the_new_snapshot(wired: Wired
     assert wired.sup.config_snapshot["difficulty"] == "hard"
 
     await wired.sup.stop()
+
+
+async def test_keys_absent_from_the_file_and_the_snapshot_are_never_pending(wired: Wired) -> None:
+    # network-settings 3.6: unset recognised keys are read with their default,
+    # but a key missing on both sides has no difference to report.
+    await wired.sup.start()
+    unset = {s.key for s in wired.svc.read() if not s.present}
+    assert "server-udp-ports" in unset
+    assert "server-udp-ports" not in wired.sup.config_snapshot
+    assert wired.svc.pending() == []
+
+    wired.svc.write({"server-udp-ports": "19140-19159"})
+    pending = {c.key: (c.saved, c.in_effect) for c in wired.svc.pending()}
+    assert pending == {"server-udp-ports": ("19140-19159", None)}
+    await wired.sup.stop()

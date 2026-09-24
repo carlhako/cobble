@@ -111,6 +111,10 @@ class PropertiesDocument:
                 value = line.value or ""
         return value
 
+    def values(self, key: str) -> list[str]:
+        """Every assignment of ``key``, in file order."""
+        return [line.value or "" for line in self._lines if line.key == key]
+
     def __contains__(self, key: str) -> bool:
         return any(line.key == key for line in self._lines)
 

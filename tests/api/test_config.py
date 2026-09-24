@@ -56,7 +56,7 @@ def test_config_write_route_is_behind_auth_guard(app_settings: Settings) -> None
 def test_read_route_returns_settings_schema_and_pending_when_stopped(client: TestClient) -> None:
     # 6.2
     body = client.get("/api/config").json()
-    settings = {s["key"]: s for s in body["settings"]}
+    settings = {s["key"]: s for s in body["settings"] if s["present"]}
     assert set(settings) == {
         "difficulty",
         "max-players",
@@ -135,3 +135,51 @@ def test_worlds_route_lists_marks_current_and_missing(client: TestClient) -> Non
     body = client.get("/api/config/worlds").json()
     assert body["current"] == "Nowhere"
     assert body["current_present"] is False
+
+
+# -- network-settings (task 4.2) ------------------------------------------------
+
+
+def test_read_and_write_routes_carry_conflicts(client: TestClient) -> None:
+    body = client.get("/api/config").json()
+    assert body["conflicts"] == []
+    udp = {s["key"]: s for s in body["settings"]}["server-udp-ports"]
+    assert udp["present"] is False and udp["value"] == ""
+
+    pinned = client.post(
+        "/api/config",
+        json={"changes": {"transport": "nethernet", "server-udp-ports": "19140-19159"}},
+    ).json()
+    assert pinned["ok"] is True and pinned["conflicts"] == [] and pinned["warnings"] == []
+
+    # A max-players write past the range: accepted, with the capacity warning.
+    raised = client.post("/api/config", json={"changes": {"max-players": "30"}}).json()
+    assert raised["ok"] is True
+    assert [i["key"] for i in raised["warnings"]] == ["server-udp-ports"]
+    assert [i["key"] for i in raised["conflicts"]] == ["server-udp-ports"]
+    assert [i["key"] for i in client.get("/api/config").json()["conflicts"]] == ["server-udp-ports"]
+
+
+def test_a_malformed_udp_range_is_a_per_key_error(client: TestClient) -> None:
+    body = client.post("/api/config", json={"changes": {"server-udp-ports": "abc"}}).json()
+    assert body["ok"] is False
+    assert [(i["key"], i["severity"]) for i in body["errors"]] == [("server-udp-ports", "error")]
+    udp = {s["key"]: s for s in client.get("/api/config").json()["settings"]}["server-udp-ports"]
+    assert udp["present"] is False
+
+
+def test_network_route_shape(client: TestClient) -> None:
+    assert "/api/config/network" in client.get("/openapi.json").json()["paths"]
+    client.post(
+        "/api/config",
+        json={"changes": {"transport": "nethernet", "server-udp-ports": "19140-19159"}},
+    )
+    body = client.get("/api/config/network").json()
+    assert set(body) == {"transport", "layout", "layouts", "conflicts"}
+    assert body["layout"] == "nethernet"
+    assert set(body["layouts"]) == {"nethernet", "raknet"}
+    nethernet = body["layouts"]["nethernet"]
+    assert set(nethernet) == {"settings", "udp_range", "lan_discovery", "forward", "pin_required"}
+    assert nethernet["udp_range"]["form"] == "range"
+    assert {"protocol": "udp", "ports": "19140-19159"} in nethernet["forward"]
+    assert body["transport"]["saved"] == "nethernet"

@@ -44,6 +44,13 @@ def test_effective_value_is_the_last_assignment() -> None:
     assert doc.serialize().count("max-players=") == 2
 
 
+def test_values_returns_every_assignment_in_order() -> None:
+    doc = PropertiesDocument.parse("a=1\n# c\nb=x\na=\na=3\n")
+    assert doc.values("a") == ["1", "", "3"]
+    assert doc.values("b") == ["x"]
+    assert doc.values("missing") == []
+
+
 def test_set_changes_only_the_matched_line() -> None:
     # 1.3 changing one value leaves every other line identical
     doc = PropertiesDocument.parse(VENDOR_ISH)

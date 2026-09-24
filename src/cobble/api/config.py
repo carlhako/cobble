@@ -32,6 +32,7 @@ def build_config_router(runtime: Runtime) -> APIRouter:
         return {
             "settings": [s.to_dict() for s in cfg.read()],
             "pending": [c.to_dict() for c in cfg.pending()],
+            "conflicts": [i.to_dict() for i in cfg.conflicts()],
         }
 
     @router.post("", summary="Write a batch of configuration changes")
@@ -47,6 +48,10 @@ def build_config_router(runtime: Runtime) -> APIRouter:
     @router.get("/transport", summary="The transport in use against the recommended one")
     async def transport() -> dict:
         return runtime.config.transport_view().to_dict()
+
+    @router.get("/network", summary="Network settings and ports to forward, per transport")
+    async def network() -> dict:
+        return runtime.config.network()
 
     @router.get("/worlds", summary="List the worlds backing level-name")
     async def worlds() -> dict:

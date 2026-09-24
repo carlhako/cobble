@@ -56,7 +56,7 @@ def env(tmp_settings: Settings) -> Env:
 
 def test_read_returns_every_setting_with_schema_for_recognised(env: Env) -> None:
     # 3.1
-    settings = {s.key: s for s in env.service().read()}
+    settings = {s.key: s for s in env.service().read() if s.present}
     assert set(settings) == {
         "server-name",
         "gamemode",
@@ -79,7 +79,7 @@ def test_read_succeeds_while_the_server_is_stopped(env: Env) -> None:
 
 def test_read_reports_the_effective_value_for_a_repeated_key(env: Env) -> None:
     env.props.write_text("max-players=10\nmax-players=25\n")
-    assert {s.key: s.value for s in env.service().read()} == {"max-players": "25"}
+    assert {s.key: s.value for s in env.service().read() if s.present} == {"max-players": "25"}
 
 
 def test_batch_write_is_all_or_nothing_on_an_invalid_value(env: Env) -> None:
@@ -167,3 +167,127 @@ def test_selecting_an_existing_world_carries_no_new_world_note(env: Env) -> None
     (env.layout.data_dir / "worlds" / "Existing").mkdir(parents=True)
     result = env.service().write({"level-name": "Existing"})
     assert result.ok and result.notes == ()
+
+
+# -- network-settings: unset recognised settings (task 3.2) -----------------
+
+
+def test_a_recognised_key_absent_from_the_file_is_read_as_not_set(env: Env) -> None:
+    before = env.text()
+    settings = {s.key: s for s in env.service().read()}
+    udp = settings["server-udp-ports"]
+    assert udp.present is False and udp.recognised and udp.value == ""
+    assert udp.to_dict()["present"] is False
+    assert settings["difficulty"].present is True
+    # Unset keys come after every key in the file, which keep file order.
+    keys = [s.key for s in env.service().read()]
+    assert keys[:7] == [
+        "server-name",
+        "gamemode",
+        "difficulty",
+        "max-players",
+        "view-distance",
+        "level-name",
+        "operator-added-key",
+    ]
+    assert env.text() == before  # reading never writes
+
+
+def test_writing_an_unset_key_adds_it_and_it_then_reads_as_present(env: Env) -> None:
+    svc = env.service()
+    result = svc.write({"server-udp-ports": "19140-19159"})
+    assert result.ok and result.changed == ("server-udp-ports",)
+    assert env.text().endswith("server-udp-ports=19140-19159\n")
+    udp = {s.key: s for s in svc.read()}["server-udp-ports"]
+    assert udp.present is True and udp.value == "19140-19159"
+
+
+def test_a_malformed_udp_range_is_rejected_and_nothing_is_written(env: Env) -> None:
+    before = env.text()
+    result = env.service().write({"server-udp-ports": "19159-19140", "difficulty": "hard"})
+    assert not result.ok
+    assert [i.key for i in result.errors] == ["server-udp-ports"]
+    assert env.text() == before
+
+
+# -- network-settings: the accumulating key (task 3.3) ----------------------
+
+SPLIT = (
+    SAMPLE
+    + "server-udp-ports=19140-19149\n"
+    + "# more\n"
+    + "server-udp-ports=\n"
+    + "server-udp-ports=19150-19159\n"
+)
+
+
+def test_a_split_udp_range_reads_as_its_entries_combined(env: Env) -> None:
+    env.props.write_text(SPLIT)
+    udp = {s.key: s for s in env.service().read()}["server-udp-ports"]
+    assert udp.present and udp.value == "19140-19149,19150-19159"
+
+
+def test_a_write_to_a_split_udp_range_is_rejected_and_the_file_is_unchanged(env: Env) -> None:
+    env.props.write_text(SPLIT)
+    result = env.service().write({"server-udp-ports": "19140-19169"})
+    assert not result.ok
+    assert [i.key for i in result.errors] == ["server-udp-ports"]
+    assert "by hand" in result.errors[0].message
+    assert env.text() == SPLIT
+
+
+def test_resubmitting_a_split_udp_range_unchanged_leaves_its_lines_alone(env: Env) -> None:
+    env.props.write_text(SPLIT)
+    result = env.service().write({"server-udp-ports": "19140-19149,19150-19159"})
+    assert result.ok and result.changed == ()
+    assert env.text() == SPLIT
+
+
+# -- network-settings: capacity conflicts on read and write (task 3.5) -------
+
+
+def _pinned(env: Env, udp: str, players: str = "10") -> None:
+    env.props.write_text(
+        SAMPLE.replace("max-players=10", f"max-players={players}")
+        + f"transport=nethernet\nserver-udp-ports={udp}\n"
+    )
+
+
+def test_a_read_reports_the_capacity_conflict(env: Env) -> None:
+    _pinned(env, "19140-19144")
+    [conflict] = env.service().conflicts()
+    assert conflict.key == "server-udp-ports" and conflict.severity == "warning"
+
+
+def test_raising_max_players_past_the_range_is_accepted_with_the_warning(env: Env) -> None:
+    _pinned(env, "19140-19149")
+    svc = env.service()
+    assert svc.conflicts() == []
+    result = svc.write({"max-players": "20"})
+    assert result.ok and "max-players=20\n" in env.text()
+    assert [i.key for i in result.warnings] == ["server-udp-ports"]
+    assert "10 UDP ports" in result.warnings[0].message
+    assert list(result.conflicts) == list(result.warnings)
+
+
+def test_narrowing_the_range_below_max_players_is_accepted_with_the_warning(env: Env) -> None:
+    _pinned(env, "19140-19159")
+    result = env.service().write({"server-udp-ports": "19140-19144"})
+    assert result.ok and "server-udp-ports=19140-19144\n" in env.text()
+    assert [i.key for i in result.warnings] == ["server-udp-ports"]
+    assert [i.key for i in result.conflicts] == ["server-udp-ports"]
+
+
+def test_widening_the_range_clears_the_conflict_on_the_write_and_later_reads(env: Env) -> None:
+    _pinned(env, "19140-19144")
+    svc = env.service()
+    result = svc.write({"server-udp-ports": "19140-19159"})
+    assert result.ok and result.warnings == () and result.conflicts == ()
+    assert svc.conflicts() == []
+
+
+def test_an_unrelated_write_reports_conflicts_but_no_new_warning(env: Env) -> None:
+    _pinned(env, "19140-19144")
+    result = env.service().write({"difficulty": "hard"})
+    assert result.ok and result.warnings == ()
+    assert [i.key for i in result.conflicts] == ["server-udp-ports"]

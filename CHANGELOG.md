@@ -5,6 +5,32 @@ workflow publishes that section as the GitHub release notes, which cobble shows
 on its own page before you upgrade. A tag without a section here is not
 published, so add the entry with the version bump.
 
+## Unreleased
+
+### What's new
+
+- **A Network section.** It shows the network settings for the transport the
+  next start will use, labelled TCP or UDP, and lets you switch the transport.
+  Under NetherNet you can pin the player UDP ports to a range, or leave them to
+  the OS. The section lists what to forward on your router for players outside
+  your network, and says to pin a range first when there's nothing to forward.
+- **A warning when the UDP range is smaller than `max-players`.** Each
+  NetherNet player uses its own UDP port. A banner at the top of the Network and
+  Configuration sections shows the mismatch until it's fixed, whichever page
+  caused it.
+- **Settings missing from `server.properties` are listed as not set.** These
+  are settings cobble recognises, such as `server-ip` and `server-udp-ports`,
+  which the vendor file doesn't ship. They show their default in Configuration,
+  and you can set them there.
+
+### Fixes
+
+- `server-port` is no longer described as a UDP port. Under NetherNet it is
+  the TCP handshake port. `server-portv6` is described as unused under
+  NetherNet.
+- A malformed `server-udp-ports` value is rejected with the reason instead of
+  being saved.
+
 ## 0.6.0 - 2026-09-24
 
 ### What's new

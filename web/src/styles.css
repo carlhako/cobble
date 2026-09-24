@@ -654,6 +654,24 @@ a.btn {
   }
 }
 
+/* -- network -- */
+.net-udp-choice label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.cfg-control .net-udp-range input[type="number"] {
+  min-width: 7rem;
+  width: 7rem;
+}
+.net-forward {
+  margin: 0.5rem 0;
+  padding-left: 1.2rem;
+}
+.net-forward li {
+  margin: 0.2rem 0;
+}
+
 /* -- cobble page: self-update card and release notes -- */
 .release-notes h2 {
   margin: 0 0 0.25rem;
