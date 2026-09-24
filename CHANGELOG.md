@@ -5,6 +5,26 @@ workflow publishes that section as the GitHub release notes, which cobble shows
 on its own page before you upgrade. A tag without a section here is not
 published, so add the entry with the version bump.
 
+## 0.6.0 - 2026-09-24
+
+### What's new
+
+- **cobble has its own page, opened from the version in the header.** Click
+  the version beside the cobble name (green when current, orange when a newer
+  release is out) to see the installed and latest versions, when cobble last
+  checked with a **Check now** button, and what's new in the latest release,
+  before you upgrade. The **Upgrade** button and its confirmation are on the
+  same page, with a link to the release on GitHub.
+- The cobble upgrade controls have moved there from **Updates & Backups →
+  Settings**, which now holds only the maintenance settings.
+- Every release now ships with release notes, and cobble shows them in the
+  panel.
+
+### Upgrading from 0.5.x
+
+On 0.5.x, upgrade from **Updates & Backups → Settings** as before. The orange
+badge there still opens GitHub. From 0.6.0 on, the badge opens the new page.
+
 ## 0.5.1 - 2026-09-24
 
 ### Fixes
