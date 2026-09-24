@@ -88,23 +88,23 @@ h2 {
   gap: 0.45rem;
   white-space: nowrap;
 }
-/* cobble's own version (web-ui-shell): green when current, orange + linked when
-   a newer release exists, muted when availability is unknown. */
+/* cobble's own version (web-ui-shell): green when current, orange when a newer
+   release exists, muted when availability is unknown; always opens /cobble. */
 .version-badge {
   font-family: var(--mono);
   font-size: 0.8rem;
   color: var(--text-dim);
+  text-decoration: none;
+}
+.version-badge:hover {
+  text-decoration: underline;
 }
 .version-badge.is-current {
   color: var(--accent);
 }
-a.version-badge.is-update {
+.version-badge.is-update {
   color: var(--warn);
   font-weight: 600;
-  text-decoration: none;
-}
-a.version-badge.is-update:hover {
-  text-decoration: underline;
 }
 .upgrade-banner {
   background: var(--accent);
@@ -654,14 +654,29 @@ a.btn {
   }
 }
 
-/* -- cobble self-update card (Settings tab) -- */
-.cobble-card {
-  padding-bottom: 1rem;
-  margin-bottom: 1rem;
-  border-bottom: 1px solid var(--border);
+/* -- cobble page: self-update card and release notes -- */
+.release-notes h2 {
+  margin: 0 0 0.25rem;
 }
-.cobble-card h3 {
-  margin: 0 0 0.6rem;
+.release-notes-body {
+  margin-top: 0.75rem;
+  line-height: 1.5;
+}
+.release-notes-body h1,
+.release-notes-body h2,
+.release-notes-body h3 {
+  font-size: 1rem;
+  margin: 1rem 0 0.4rem;
+}
+.release-notes-body ul {
+  padding-left: 1.25rem;
+}
+.release-notes-body code {
+  font-family: var(--mono);
+  font-size: 0.85em;
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 0.05rem 0.3rem;
 }
 .manual-upgrade code {
   font-family: var(--mono);

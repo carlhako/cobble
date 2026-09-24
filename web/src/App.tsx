@@ -1,38 +1,37 @@
-import { NavLink, Route, Routes } from "react-router-dom";
+import { Link, NavLink, Route, Routes } from "react-router-dom";
 import { sections } from "./sections";
 import { ConnectionBanner } from "./components/ConnectionBanner";
 import { StatusProvider, useStatus } from "./api/StatusContext";
 import { CobbleVersionProvider, useCobbleVersion } from "./api/useCobbleVersion";
 
-/** `[0.4.0]` beside the brand: green when current, orange and linked to the
- *  release when a newer one exists, muted when availability is unknown
- *  (web-ui-shell: the cobble version and its update state). */
+/** `[0.4.0]` beside the brand: green when current, orange when a newer
+ *  release exists, muted when availability is unknown. In every state it opens
+ *  the cobble page (web-ui-shell: the cobble version and its update state). */
 function VersionBadge() {
   const { info } = useCobbleVersion();
   if (!info) return null;
-  if (info.update_available && info.release_url) {
+  if (info.update_available) {
     return (
-      <a
+      <Link
+        to="/cobble"
         className="version-badge is-update"
-        href={info.release_url}
-        target="_blank"
-        rel="noopener noreferrer"
         title={`cobble ${info.latest} is available`}
       >
         [{info.current} update available]
-      </a>
+      </Link>
     );
   }
   // A failed check keeps the last successful result, which still answers
   // whether this install is current (cobble-self-update).
   const known = info.latest !== null;
   return (
-    <span
+    <Link
+      to="/cobble"
       className={`version-badge${known ? " is-current" : ""}`}
       title={known ? "cobble is up to date" : "update availability unknown"}
     >
       [{info.current}]
-    </span>
+    </Link>
   );
 }
 
@@ -60,11 +59,13 @@ function Shell() {
           <VersionBadge />
         </span>
         <nav className="app-nav">
-          {sections.map((s) => (
-            <NavLink key={s.path} to={s.path} end={s.path === "/"}>
-              {s.label}
-            </NavLink>
-          ))}
+          {sections
+            .filter((s) => s.nav !== false)
+            .map((s) => (
+              <NavLink key={s.path} to={s.path} end={s.path === "/"}>
+                {s.label}
+              </NavLink>
+            ))}
         </nav>
       </header>
       <UpgradeBanner />

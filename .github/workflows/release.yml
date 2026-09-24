@@ -13,6 +13,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The release notes are this tag's CHANGELOG.md section; cobble shows them
+      # on its own page before an operator upgrades. A tag without an entry
+      # fails here, before anything is built or published.
+      - name: Release notes from CHANGELOG.md
+        run: .github/scripts/release-notes.sh "${GITHUB_REF_NAME}" > release-notes.md
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -65,6 +71,7 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
+          body_path: release-notes.md
           files: |
             cobble.tar.gz
             install.sh

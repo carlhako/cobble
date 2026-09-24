@@ -474,6 +474,9 @@ export interface CobbleVersion {
   latest: string | null;
   update_available: boolean;
   release_url: string | null;
+  release_name: string | null;
+  published_at: string | null;
+  notes: string | null; // Markdown; null when the release was published without notes
   checked_at: string | null;
   check_error: string | null;
   one_click_available: boolean;

@@ -7,7 +7,10 @@ a restart while offline does not blank the header badge. A failed check never
 discards the last good result; it only records ``check_error``.
 
 Conditional requests (``If-None-Match``) keep the check cheap: a 304 does not
-count against GitHub's unauthenticated rate limit.
+count against GitHub's unauthenticated rate limit. The persisted state carries a
+``schema`` number; a file from an older schema keeps its result but not its ETag,
+so the next check fetches the release in full and picks up fields (such as the
+release notes) the older cobble never stored.
 """
 
 from __future__ import annotations
@@ -32,6 +35,8 @@ log = get_logger("selfupdate.release_check")
 # Delay before the first check, so it never competes with first-run bootstrap.
 INITIAL_DELAY_SECONDS = 30.0
 _TIMEOUT = httpx.Timeout(10.0)
+# Bumped whenever the stored release gains fields that a 304 would never fill.
+SCHEMA = 2
 
 
 def now_iso() -> str:
@@ -43,6 +48,9 @@ class ReleaseCheckState:
     latest: str | None = None  # "0.5.0" (no leading v)
     tag: str | None = None  # "v0.5.0" exactly as published
     release_url: str | None = None
+    name: str | None = None  # the release's title as published
+    published_at: str | None = None
+    notes: str | None = None  # Markdown body; None when published empty
     etag: str | None = None
     checked_at: str | None = None  # last attempt, successful or not
     check_error: str | None = None  # why the last attempt failed; None if it succeeded
@@ -73,7 +81,10 @@ class ReleaseChecker:
         try:
             raw = json.loads(self._path.read_text())
             fields = ReleaseCheckState.__dataclass_fields__
-            return ReleaseCheckState(**{k: v for k, v in raw.items() if k in fields})
+            state = ReleaseCheckState(**{k: v for k, v in raw.items() if k in fields})
+            if raw.get("schema", 1) < SCHEMA:
+                state.etag = None  # force a full fetch to fill the newer fields
+            return state
         except FileNotFoundError:
             return ReleaseCheckState()
         except (OSError, ValueError, TypeError):
@@ -82,7 +93,7 @@ class ReleaseChecker:
 
     def _save(self) -> None:
         try:
-            atomic_write_text(self._path, json.dumps(asdict(self._state)))
+            atomic_write_text(self._path, json.dumps({"schema": SCHEMA, **asdict(self._state)}))
         except OSError:
             log.exception("could not persist the release check result")
 
@@ -103,6 +114,9 @@ class ReleaseChecker:
             "latest": self._state.latest,
             "update_available": bool(self.update_available()),
             "release_url": self._state.release_url,
+            "release_name": self._state.name,
+            "published_at": self._state.published_at,
+            "notes": self._state.notes,
             "checked_at": self._state.checked_at,
             "check_error": self._state.check_error,
         }
@@ -155,6 +169,9 @@ class ReleaseChecker:
             tag = payload["tag_name"]
             html_url = payload["html_url"]
             unstable = bool(payload.get("draft")) or bool(payload.get("prerelease"))
+            name = payload.get("name")
+            published_at = payload.get("published_at")
+            body = payload.get("body")
         except (ValueError, KeyError, TypeError) as exc:
             return self._fail(f"release source returned an unusable response: {exc}")
         if unstable:
@@ -167,6 +184,9 @@ class ReleaseChecker:
             latest="{}.{}.{}".format(*parsed),
             tag=tag,
             release_url=html_url,
+            name=name if isinstance(name, str) and name.strip() else None,
+            published_at=published_at if isinstance(published_at, str) else None,
+            notes=body.strip() if isinstance(body, str) and body.strip() else None,
             etag=resp.headers.get("ETag"),
             checked_at=self._now(),
             check_error=None,

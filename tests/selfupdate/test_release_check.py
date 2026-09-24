@@ -60,6 +60,9 @@ def test_200_newer_release_is_reported_available(settings: Settings) -> None:
         "latest": "0.5.0",
         "update_available": True,
         "release_url": "https://github.com/carlhako/cobble/releases/tag/v0.5.0",
+        "release_name": None,
+        "published_at": None,
+        "notes": None,
         "checked_at": "T",
         "check_error": None,
     }
@@ -146,3 +149,66 @@ def test_corrupt_cache_file_is_ignored(settings: Settings) -> None:
     (settings.state_dir / "release_check.json").write_text("{nope")
     c = ReleaseChecker(settings, current="0.4.0", transport=FakeGitHub().transport)
     assert c.update_available() is None
+
+
+def test_notes_title_and_date_are_reported(settings: Settings) -> None:
+    rel = _release(
+        "v0.5.0",
+        name="cobble 0.5.0",
+        published_at="2026-09-24T00:17:27Z",
+        body="## What's new\n\n- things\n",
+    )
+    c = _checker(settings, FakeGitHub(_ok(rel)))
+    c.check_now()
+    view = c.view()
+    assert view["release_name"] == "cobble 0.5.0"
+    assert view["published_at"] == "2026-09-24T00:17:27Z"
+    assert view["notes"] == "## What's new\n\n- things"
+
+
+def test_notes_are_reported_when_already_current(settings: Settings) -> None:
+    c = _checker(settings, FakeGitHub(_ok(_release("v0.4.0", body="- fixed"))))
+    c.check_now()
+    assert c.update_available() is False
+    assert c.view()["notes"] == "- fixed"
+
+
+@pytest.mark.parametrize("body", ["", "  \n\t ", None])
+def test_empty_notes_are_absent(settings: Settings, body: str | None) -> None:
+    c = _checker(settings, FakeGitHub(_ok(_release("v0.5.0", body=body, name=""))))
+    c.check_now()
+    assert c.update_available() is True
+    assert c.view()["notes"] is None
+    assert c.view()["release_name"] is None
+
+
+def test_state_without_schema_is_fetched_in_full(settings: Settings) -> None:
+    # What a v0.5.x cobble persisted: a result and an ETag, but no notes.
+    (settings.state_dir / "release_check.json").write_text(
+        json.dumps(
+            {
+                "latest": "0.5.0",
+                "tag": "v0.5.0",
+                "release_url": "https://github.com/carlhako/cobble/releases/tag/v0.5.0",
+                "etag": '"old"',
+                "checked_at": "T0",
+                "check_error": None,
+            }
+        )
+    )
+    gh = FakeGitHub(_ok(_release("v0.5.0", body="- notes"), etag='"new"'))
+    c = _checker(settings, gh)
+    assert c.update_available() is True  # the old result is still served
+    c.check_now()
+    assert "If-None-Match" not in gh.requests[0].headers
+    assert c.view()["notes"] == "- notes"
+    stored = json.loads((settings.state_dir / "release_check.json").read_text())
+    assert stored["schema"] == 2
+    assert stored["notes"] == "- notes"
+
+
+def test_current_schema_keeps_its_etag_across_a_restart(settings: Settings) -> None:
+    _checker(settings, FakeGitHub(_ok(_release("v0.5.0"), etag='"e1"'))).check_now()
+    gh = FakeGitHub(httpx.Response(304))
+    _checker(settings, gh).check_now()
+    assert gh.requests[0].headers["If-None-Match"] == '"e1"'

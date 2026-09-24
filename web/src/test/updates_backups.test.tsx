@@ -332,6 +332,10 @@ describe("Maintenance tabs (task 7)", () => {
 
     await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
     expect(await screen.findByText(/backups retained/)).toBeInTheDocument();
+    // cobble's own upgrade controls live on the cobble page, not here.
+    expect(screen.queryByText("cobble (control panel)")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Check now" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Upgrade to/ })).toBeNull();
   });
 
   it("7.6 renders backup history including a pruned/not-held row", async () => {
