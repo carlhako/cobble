@@ -3,9 +3,10 @@
 A web control panel for a Minecraft **Bedrock Dedicated Server**.
 
 Start, stop and watch your server from a browser, send console commands, edit
-server settings and gamerules, track players, and get automatic updates and
-backups. It's a single small Python service with only a handful of dependencies
-and no Node or build tools needed on the server.
+server settings and gamerules, track players, import worlds, and get automatic
+updates and backups. cobble keeps itself current too: new releases show up in
+the header and install with one click. It's a single small Python service with
+only a handful of dependencies and no Node or build tools needed on the server.
 
 Designed for running at home on your LAN in a **Proxmox LXC**, but it runs just as
 well on any **Debian 12 or 13** VM or bare-metal install.
@@ -19,7 +20,7 @@ well on any **Debian 12 or 13** VM or bare-metal install.
 
 ![Console](docs/screenshots/console.png)
 
-**Updates & Backups** — version status, scheduled updates, and restorable backups.
+**Updates & Backups** — version status, scheduled updates, restorable backups, and their history.
 
 ![Updates & Backups](docs/screenshots/updates.png)
 
@@ -65,15 +66,17 @@ curl -fsSL https://github.com/carlhako/cobble/releases/latest/download/install.s
 ```
 
 The script verifies architecture and glibc, installs `python3`/`python3-venv`/`unzip`,
-fetches the release tarball, creates `/srv/bedrock` and `/var/lib/cobble`, and
-installs and enables `cobble.service`.
+fetches the release tarball, creates `/srv/bedrock` and `/var/lib/cobble`,
+installs and enables `cobble.service`, and installs the small root helper that
+one-click upgrades use (`cobble-upgrade.path`/`.service`).
 
 Root is only needed for the install. The script creates a dedicated system user,
 **`cobble`** (no login shell, home `/var/lib/cobble`), and hands it ownership of
-`/opt/cobble`, `/srv/bedrock`, `/var/lib/cobble` and `/backup` (if `/backup` is a
-bind mount the script can't `chown`, it warns — make it writable by `cobble` on the
-host side). The service runs as that user, so cobble and the Bedrock server it
-spawns never run as root; binding port 80 is granted to the unit through
+`/srv/bedrock`, `/var/lib/cobble` and `/backup` (if `/backup` is a bind mount the
+script can't `chown`, it warns — make it writable by `cobble` on the host side).
+The application itself, `/opt/cobble`, stays owned by root: cobble only reads it.
+The service runs as that user, so cobble and the Bedrock server it spawns never
+run as root; binding port 80 is granted to the unit through
 `CAP_NET_BIND_SERVICE` alone.
 
 On first start cobble resolves the current BDS version, downloads and extracts it
@@ -100,6 +103,12 @@ and comes back once the new cobble has started. Players are disconnected for
 that time. The page reloads itself onto the new version, and the card shows
 the outcome. The full log is in `journalctl -u cobble-upgrade`.
 
+If anything goes wrong — the download fails, a file doesn't match its published
+digest, or the new version doesn't start — the previous cobble keeps running,
+the Bedrock server is started again if it was running, and the card shows the
+error (with the installer's output, if it got that far). The pre-upgrade backup
+appears in the backup list like any other, so you can restore it if you need to.
+
 **Installs of v0.4.0 and earlier** don't have the helper yet. Upgrade those once
 by re-running the installer as root on the container. After that, one-click
 upgrades work:
@@ -120,9 +129,10 @@ With no internet access, set `COBBLE_RELEASE_CHECK_ENABLED=false` in
 ## Filesystem layout
 
 ```
-/opt/cobble/venv/         virtualenv with cobble + deps installed (bundle included)
+/opt/cobble/venv/         virtualenv with cobble + deps installed (bundle included); root-owned
 /usr/local/libexec/cobble/cobble-upgrade   root-owned upgrade helper (run by cobble-upgrade.service)
 /var/lib/cobble-upgrade/  root-owned; the helper's status.json, readable by cobble
+/etc/systemd/system/      cobble.service, plus cobble-upgrade.path/.service for the helper
 /srv/bedrock/
     versions/<version>/   extracted BDS — pure vendor payload, one directory per version
     current -> versions/… symlink naming the active version (the only thing an update swaps)
@@ -135,7 +145,7 @@ With no internet access, set `COBBLE_RELEASE_CHECK_ENABLED=false` in
         definitions -> ../current/definitions         …and every other payload entry
 /var/lib/cobble/          cobble's own durable state (backed up as a unit)
     upgrade/              where cobble drops an upgrade request for the root helper
-/backup/                  backup destination (scheduled, pre-update, and on-demand backups)
+/backup/                  backup destination (scheduled, pre-update, pre-upgrade, and on-demand backups)
 ```
 
 The world and the operator-editable config live under `/srv/bedrock/data/`, which
