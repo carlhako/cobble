@@ -24,6 +24,10 @@ well on any **Debian 12 or 13** VM or bare-metal install.
 
 ![Updates & Backups](docs/screenshots/updates.png)
 
+**cobble** — opened from the version beside the name in the header: cobble's own installed and latest versions, what's new in the latest release, and one-click upgrade.
+
+![cobble](docs/screenshots/cobble.png)
+
 **Configuration** — `server.properties` edited from the browser, with defaults and descriptions.
 
 ![Configuration](docs/screenshots/configuration.png)
