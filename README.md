@@ -20,7 +20,7 @@ well on any **Debian 12 or 13** VM or bare-metal install.
 
 ![Console](docs/screenshots/console.png)
 
-**Updates & Backups** — version status, scheduled updates, restorable backups, and their history.
+**Updates & Backups** — Bedrock version status, backup and version history, and settings, including cobble's own version and one-click upgrade.
 
 ![Updates & Backups](docs/screenshots/updates.png)
 
