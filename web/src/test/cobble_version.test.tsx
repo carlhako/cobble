@@ -4,9 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CobbleVersion } from "../api/client";
 import { UPGRADE_POLL_MS } from "../api/useCobbleVersion";
-import { UpdatesBackups } from "../sections/UpdatesBackups";
 import { FakeEventSource } from "./fakeEventSource";
-import { renderApp } from "./util";
 
 const RELEASE = "https://github.com/carlhako/cobble/releases/tag/v0.5.0";
 
@@ -16,6 +14,9 @@ function version(over: Partial<CobbleVersion> = {}): CobbleVersion {
     latest: "0.4.0",
     update_available: false,
     release_url: "https://github.com/carlhako/cobble/releases/tag/v0.4.0",
+    release_name: "v0.4.0",
+    published_at: "2026-09-23T01:55:56Z",
+    notes: "## What's new\n\n- **Backup history** tabs",
     checked_at: "2026-09-24T01:00:00+00:00",
     check_error: null,
     one_click_available: true,
@@ -29,6 +30,9 @@ const AVAILABLE = version({
   latest: "0.5.0",
   update_available: true,
   release_url: RELEASE,
+  release_name: "v0.5.0",
+  published_at: "2026-09-24T00:17:27Z",
+  notes: "## Fixes\n\n- NetherNet transport, see [the docs](https://example.test/docs)",
 });
 
 type Handler = (init?: RequestInit) => unknown;
@@ -65,10 +69,10 @@ function mockFetch(routes: Record<string, unknown | Handler>) {
   return fn;
 }
 
-async function renderShell() {
+async function renderShell(path = "/") {
   const { App } = await import("../App");
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[path]}>
       <App />
     </MemoryRouter>,
   );
@@ -83,18 +87,30 @@ describe("header version badge (7.2)", () => {
   it("is green [x.y.z] when current", async () => {
     mockFetch({ "GET /api/cobble/version": version() });
     await renderShell();
-    const badge = await screen.findByText("[0.4.0]");
+    const badge = await screen.findByRole("link", { name: "[0.4.0]" });
     expect(badge).toHaveClass("version-badge", "is-current");
-    expect(badge.tagName).toBe("SPAN");
+    expect(badge).toHaveAttribute("href", "/cobble");
   });
 
-  it("is orange [x.y.z update available] linking to the release", async () => {
+  it("is orange [x.y.z update available] linking to the cobble page", async () => {
     mockFetch({ "GET /api/cobble/version": AVAILABLE });
     await renderShell();
     const link = await screen.findByRole("link", { name: "[0.4.0 update available]" });
     expect(link).toHaveClass("version-badge", "is-update");
-    expect(link).toHaveAttribute("href", RELEASE);
-    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("href", "/cobble");
+    expect(link).not.toHaveAttribute("target");
+  });
+
+  it("opens the cobble page when clicked", async () => {
+    mockFetch({ "GET /api/cobble/version": AVAILABLE });
+    await renderShell();
+    await userEvent.click(
+      await screen.findByRole("link", { name: "[0.4.0 update available]" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "cobble (control panel)" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Upgrade to 0.5.0" })).toBeInTheDocument();
   });
 
   it("stays green after a failed check that kept the last result", async () => {
@@ -116,8 +132,9 @@ describe("header version badge (7.2)", () => {
       }),
     });
     await renderShell();
-    const badge = await screen.findByText("[0.4.0]");
+    const badge = await screen.findByRole("link", { name: "[0.4.0]" });
     expect(badge).not.toHaveClass("is-current");
+    expect(badge).toHaveAttribute("href", "/cobble");
     expect(screen.queryByText(/unreachable/)).toBeNull();
   });
 
@@ -148,14 +165,14 @@ describe("header version badge (7.2)", () => {
   });
 });
 
-async function openSettings() {
-  renderApp(<UpdatesBackups />);
+async function openCobblePage() {
+  await renderShell("/cobble");
   await waitFor(() => expect(FakeEventSource.byUrl("/api/status/stream")).toBeTruthy());
-  await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
-  return screen.findByRole("heading", { name: "cobble (control panel)" });
+  await screen.findByRole("heading", { name: "cobble (control panel)" });
+  return screen.findByText("Installed");
 }
 
-describe("cobble card in Settings (7.3)", () => {
+describe("cobble page", () => {
   beforeEach(() => {
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -163,15 +180,18 @@ describe("cobble card in Settings (7.3)", () => {
     });
   });
 
-  it("shows versions, checked-at, release notes, and Check now", async () => {
+  it("shows versions, checked-at, the GitHub link, and Check now", async () => {
     const fetchFn = mockFetch({
       "GET /api/cobble/version": version(),
       "POST /api/cobble/check": AVAILABLE,
     });
-    await openSettings();
+    await openCobblePage();
     expect(screen.getByText("Latest release").nextSibling).toHaveTextContent("0.4.0");
     expect(screen.getByText("Up to date")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "release notes" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View on GitHub" })).toHaveAttribute(
+      "href",
+      "https://github.com/carlhako/cobble/releases/tag/v0.4.0",
+    );
 
     await userEvent.click(screen.getByRole("button", { name: "Check now" }));
     expect(await screen.findByText("Update available")).toBeInTheDocument();
@@ -197,7 +217,7 @@ describe("cobble card in Settings (7.3)", () => {
         },
       },
     });
-    await openSettings();
+    await openCobblePage();
     await userEvent.click(
       await screen.findByRole("button", { name: "Upgrade to 0.5.0" }),
     );
@@ -220,7 +240,7 @@ describe("cobble card in Settings (7.3)", () => {
 
   it("disables Upgrade while maintenance is in progress", async () => {
     mockFetch({ "GET /api/cobble/version": AVAILABLE });
-    await openSettings();
+    await openCobblePage();
     const es = FakeEventSource.byUrl("/api/status/stream");
     act(() =>
       es!.emit({
@@ -243,7 +263,7 @@ describe("cobble card in Settings (7.3)", () => {
         manual_command: cmd,
       },
     });
-    await openSettings();
+    await openCobblePage();
     expect(await screen.findByLabelText("manual upgrade command")).toHaveTextContent(cmd);
     expect(screen.queryByRole("button", { name: /Upgrade to/ })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Copy" }));
@@ -266,7 +286,7 @@ describe("cobble card in Settings (7.3)", () => {
         },
       },
     });
-    await openSettings();
+    await openCobblePage();
     expect(
       await screen.findByText(/does not match its published sha256/),
     ).toBeInTheDocument();
@@ -289,11 +309,93 @@ describe("cobble card in Settings (7.3)", () => {
         },
       }),
     });
-    await openSettings();
+    await openCobblePage();
     expect(
       await screen.findByText(/Last upgrade: 0.4.0 → 0.5.0, succeeded/),
     ).toBeInTheDocument();
     expect(screen.queryByLabelText("upgrade output")).toBeNull();
+  });
+});
+
+describe("release notes on the cobble page", () => {
+  it("renders the latest release's notes as Markdown, links opening outside", async () => {
+    mockFetch({ "GET /api/cobble/version": AVAILABLE });
+    await openCobblePage();
+    expect(
+      screen.getByRole("heading", { name: "What's new in 0.5.0" }),
+    ).toBeInTheDocument();
+    // The title is just the tag here, so only the date is shown under the heading.
+    expect(screen.getByText(/^Published /)).toBeInTheDocument();
+    expect(screen.queryByText(/v0\.5\.0 ·/)).toBeNull();
+    const notes = screen.getByLabelText("release notes");
+    expect(within(notes).getByRole("heading", { name: "Fixes" })).toBeInTheDocument();
+    expect(within(notes).getByRole("listitem")).toHaveTextContent(/NetherNet transport/);
+    const link = within(notes).getByRole("link", { name: "the docs" });
+    expect(link).toHaveAttribute("href", "https://example.test/docs");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
+  it("shows a release title that says more than the version", async () => {
+    mockFetch({
+      "GET /api/cobble/version": { ...AVAILABLE, release_name: "The NetherNet fix" },
+    });
+    await openCobblePage();
+    expect(screen.getByText(/^The NetherNet fix · Published /)).toBeInTheDocument();
+  });
+
+  it("shows the notes when already on the latest release", async () => {
+    mockFetch({ "GET /api/cobble/version": version() });
+    await openCobblePage();
+    expect(
+      screen.getByRole("heading", { name: "What's new in 0.4.0" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("release notes")).toHaveTextContent("Backup history");
+  });
+
+  it("says so when the release was published without notes", async () => {
+    mockFetch({ "GET /api/cobble/version": { ...AVAILABLE, notes: null } });
+    await openCobblePage();
+    expect(screen.getByText(/No release notes were published/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("release notes")).toBeNull();
+    expect(screen.getByRole("link", { name: "View on GitHub" })).toHaveAttribute(
+      "href",
+      RELEASE,
+    );
+  });
+
+  it("shows no notes area when no release is known", async () => {
+    mockFetch({
+      "GET /api/cobble/version": version({
+        latest: null,
+        release_url: null,
+        release_name: null,
+        published_at: null,
+        notes: null,
+      }),
+    });
+    await openCobblePage();
+    expect(screen.getByText("Latest release").nextSibling).toHaveTextContent("unknown");
+    expect(screen.queryByRole("heading", { name: /What's new/ })).toBeNull();
+    expect(screen.queryByText(/No release notes were published/)).toBeNull();
+  });
+
+  it("never renders raw HTML or script from the notes", async () => {
+    const alert = vi.fn();
+    vi.stubGlobal("alert", alert);
+    mockFetch({
+      "GET /api/cobble/version": {
+        ...AVAILABLE,
+        notes:
+          'safe text\n\n<script>alert(1)</script>\n\n<img src=x onerror="alert(2)">\n\n[x](javascript:alert(3))',
+      },
+    });
+    await openCobblePage();
+    const notes = screen.getByLabelText("release notes");
+    expect(notes).toHaveTextContent("safe text");
+    expect(notes.querySelector("script, img, [onerror]")).toBeNull();
+    expect(notes.querySelector('a[href^="javascript"]')).toBeNull();
+    expect(alert).not.toHaveBeenCalled();
   });
 });
 

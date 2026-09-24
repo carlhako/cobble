@@ -6,11 +6,15 @@ import { Configuration } from "./sections/Configuration";
 import { Gamerules } from "./sections/Gamerules";
 import { Players } from "./sections/Players";
 import { ImportWorld } from "./sections/ImportWorld";
+import { Cobble } from "./sections/Cobble";
 
 export interface Section {
   path: string;
   label: string;
   element: ReactElement;
+  /** `false` routes the section without listing it in the navigation bar, for a
+   *  screen reached from elsewhere in the interface. Defaults to listed. */
+  nav?: boolean;
 }
 
 // The shell renders navigation and routes from this list. Adding a screen in
@@ -24,4 +28,6 @@ export const sections: Section[] = [
   { path: "/gamerules", label: "Gamerules", element: <Gamerules /> },
   { path: "/players", label: "Players", element: <Players /> },
   { path: "/import", label: "Import World", element: <ImportWorld /> },
+  // Opened from the header version badge (web-ui-shell: the cobble page).
+  { path: "/cobble", label: "cobble", element: <Cobble />, nav: false },
 ];

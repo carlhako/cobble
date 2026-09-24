@@ -20,7 +20,7 @@ well on any **Debian 12 or 13** VM or bare-metal install.
 
 ![Console](docs/screenshots/console.png)
 
-**Updates & Backups** — Bedrock version status, backup and version history, and settings, including cobble's own version and one-click upgrade.
+**Updates & Backups** — Bedrock version status, backup and version history, and maintenance settings.
 
 ![Updates & Backups](docs/screenshots/updates.png)
 
@@ -92,21 +92,22 @@ Open `http://<server-ip>/` in a browser on the LAN.
 
 The header shows the running version beside the name, e.g. `[0.5.0]`, in green.
 When a newer release is out on GitHub it turns orange and reads
-`[0.5.0 update available]`. Click it to open the release notes.
+`[0.5.0 update available]`. Click it, in any state, to open cobble's own page:
+the installed and latest versions, when it last checked (with **Check now**),
+the latest release's notes, and a link to the release on GitHub.
 
-To upgrade, open **Updates & Backups → Settings** and use **Upgrade** on the
-cobble card. cobble takes a verified backup, then hands the request to a small
+To upgrade, use **Upgrade** on that page. cobble takes a verified backup, then hands the request to a small
 root helper (`cobble-upgrade.service`, installed by the script). The helper
 downloads exactly that release, checks it against the sha256 digests GitHub
 publishes, and re-runs its installer. The Bedrock server stops for the backup
 and comes back once the new cobble has started. Players are disconnected for
-that time. The page reloads itself onto the new version, and the card shows
-the outcome. The full log is in `journalctl -u cobble-upgrade`.
+that time. The page reloads itself onto the new version and shows the
+outcome. The full log is in `journalctl -u cobble-upgrade`.
 
 If anything goes wrong — the download fails, a file doesn't match its published
 digest, or the new version doesn't start — the previous cobble keeps running,
-the Bedrock server is started again if it was running, and the card shows the
-error (with the installer's output, if it got that far). The pre-upgrade backup
+the Bedrock server is started again if it was running, and the cobble page
+shows the error (with the installer's output, if it got that far). The pre-upgrade backup
 appears in the backup list like any other, so you can restore it if you need to.
 
 **Installs of v0.4.0 and earlier** don't have the helper yet. Upgrade those once
@@ -387,6 +388,15 @@ npm --prefix web run build     # emits src/cobble/static/
 COBBLE_PORT=8000 python -m cobble
 COBBLE_PORT=8000 npm --prefix web run dev
 ```
+
+### Releasing
+
+Bump the version in `pyproject.toml` and `src/cobble/__init__.py`, and add a
+`## <version> - <date>` section to [CHANGELOG.md](CHANGELOG.md) in the same
+commit, then push a `v<version>` tag. The release workflow publishes that
+section as the release notes, which cobble shows operators before they upgrade.
+A tag with no changelog entry fails the workflow and nothing is published.
+Check the entry first with `.github/scripts/release-notes.sh <version>`.
 
 ## License
 

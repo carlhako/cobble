@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useStatus } from "../api/StatusContext";
-import { useCobbleVersion } from "../api/useCobbleVersion";
 import {
   ApiCallError,
   api,
   type BackupEntry,
   type BackupHistoryEntry,
-  type CobbleVersion,
   type MaintenanceSettings,
   type ScheduleConfig,
   type ScheduleFrequency,
@@ -572,185 +570,6 @@ function SettingsTab() {
   );
 }
 
-/** cobble's own version and one-click upgrade (cobble-self-update; web-ui-shell:
- *  "Cobble upgrades are available from the settings screen"). Distinct from the
- *  Bedrock server's version panel above. */
-function CobbleCard() {
-  const { status, stale } = useStatus();
-  const { info, set } = useCobbleVersion();
-  const [working, setWorking] = useState<null | "check" | "upgrade">(null);
-  const [confirm, setConfirm] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-
-  const heading = <h3>cobble (control panel)</h3>;
-  if (!info)
-    return (
-      <div className="cobble-card">
-        {heading}
-        <p className="muted">Loading…</p>
-      </div>
-    );
-
-  const u = info.upgrade;
-  const inFlight = u?.state === "pending" || u?.state === "running";
-  const busy = stale || !!status?.maintenance || inFlight;
-
-  const call = async (kind: "check" | "upgrade", fn: () => Promise<CobbleVersion>) => {
-    setWorking(kind);
-    setErr(null);
-    try {
-      set(await fn());
-      setConfirm(false);
-    } catch (e) {
-      setErr(e instanceof ApiCallError ? `${e.code}: ${e.message}` : String(e));
-    } finally {
-      setWorking(null);
-    }
-  };
-
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(info.manual_command ?? "");
-      setCopied(true);
-    } catch {
-      setCopied(false);
-    }
-  };
-
-  return (
-    <div className="cobble-card">
-      {heading}
-      <div className="cards">
-        <div className="card">
-          <div className="card-label">Installed</div>
-          <div className="card-value">{info.current}</div>
-        </div>
-        <div className="card">
-          <div className="card-label">Latest release</div>
-          <div className="card-value">{info.latest ?? "unknown"}</div>
-        </div>
-        <div className="card">
-          <div className="card-label">Status</div>
-          <div className="card-value">
-            {inFlight
-              ? "Upgrading"
-              : info.update_available
-                ? "Update available"
-                : info.latest
-                  ? "Up to date"
-                  : "Not checked"}
-          </div>
-        </div>
-      </div>
-      <div className="muted">
-        Last checked {fmtTime(info.checked_at)}
-        {info.release_url && (
-          <>
-            {" · "}
-            <a href={info.release_url} target="_blank" rel="noopener noreferrer">
-              release notes
-            </a>
-          </>
-        )}
-      </div>
-      {info.check_error && (
-        <div className="muted">
-          The last check could not reach GitHub: {info.check_error}
-        </div>
-      )}
-
-      <div className="controls-row">
-        <button
-          className="btn"
-          disabled={working !== null}
-          onClick={() => void call("check", api.cobbleCheck)}
-        >
-          {working === "check" ? "Checking…" : "Check now"}
-        </button>
-        {info.update_available && info.one_click_available && info.latest && (
-          <button
-            className="btn"
-            disabled={busy || working !== null}
-            onClick={() => setConfirm(true)}
-          >
-            Upgrade to {info.latest}
-          </button>
-        )}
-      </div>
-
-      {info.update_available && !info.one_click_available && info.manual_command && (
-        <div className="manual-upgrade">
-          <p>
-            This install predates one-click upgrades. To upgrade, run this as root on the
-            container. Later upgrades can then be done from here.
-          </p>
-          <div className="controls-row">
-            <code aria-label="manual upgrade command">{info.manual_command}</code>
-            <button className="btn" onClick={() => void copy()}>
-              {copied ? "Copied" : "Copy"}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {confirm && info.latest && (
-        <div
-          className="panel is-warn"
-          role="alertdialog"
-          aria-label="confirm cobble upgrade"
-        >
-          <strong>Upgrade cobble to {info.latest}?</strong>
-          <p className="warn">
-            The Bedrock server will be stopped and players disconnected. cobble takes a
-            verified backup, installs {info.latest}, and restarts. The server comes back
-            once the new cobble has started, and this page reloads by itself.
-          </p>
-          <div className="controls-row">
-            <button
-              className="btn btn-stop"
-              disabled={busy || working !== null}
-              onClick={() =>
-                void call("upgrade", () => api.cobbleUpgrade(info.latest ?? ""))
-              }
-            >
-              {working === "upgrade" ? "Backing up…" : "Back up and upgrade"}
-            </button>
-            <button
-              className="btn"
-              disabled={working !== null}
-              onClick={() => setConfirm(false)}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      {err && <div className="controls-error">{err}</div>}
-
-      {inFlight && u && (
-        <div className="muted" role="status">
-          Upgrade to {u.to}{" "}
-          {u.state === "running" ? "is installing" : "is waiting for the helper"}…
-        </div>
-      )}
-      {u && !inFlight && (
-        <div className={u.state === "succeeded" ? "ok" : "warn"} role="status">
-          Last upgrade: {u.from ?? "?"} → {u.to ?? "?"},{" "}
-          {u.state === "succeeded" ? "succeeded" : u.state} {fmtTime(u.finished_at)}
-          {u.error && <div>{u.error}</div>}
-        </div>
-      )}
-      {u && !inFlight && u.state !== "succeeded" && u.log_tail && (
-        <pre className="diag-output" aria-label="upgrade output">
-          {u.log_tail}
-        </pre>
-      )}
-    </div>
-  );
-}
-
 type MaintenanceTab = "history" | "versions" | "settings";
 
 /** Tabbed panel under the version panel: backup history, version history, and
@@ -782,12 +601,7 @@ function MaintenanceTabsPanel() {
       <div role="tabpanel">
         {tab === "history" && <BackupHistoryTab />}
         {tab === "versions" && <VersionHistoryTab />}
-        {tab === "settings" && (
-          <>
-            <CobbleCard />
-            <SettingsTab />
-          </>
-        )}
+        {tab === "settings" && <SettingsTab />}
       </div>
     </div>
   );

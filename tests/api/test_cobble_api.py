@@ -32,7 +32,13 @@ def client(app_settings: Settings):
 
 def _available(client: TestClient, latest: str = "0.5.0") -> None:
     client.app.state.runtime.release_check._state = ReleaseCheckState(
-        latest=latest, tag=f"v{latest}", release_url=RELEASE_URL, checked_at="T"
+        latest=latest,
+        tag=f"v{latest}",
+        release_url=RELEASE_URL,
+        name=f"cobble {latest}",
+        published_at="2026-09-24T00:17:27Z",
+        notes="- new things",
+        checked_at="T",
     )
 
 
@@ -55,6 +61,9 @@ def test_version_shape_before_any_check(client: TestClient) -> None:
         "latest": None,
         "update_available": False,
         "release_url": None,
+        "release_name": None,
+        "published_at": None,
+        "notes": None,
         "checked_at": None,
         "check_error": None,
         "one_click_available": False,
@@ -73,6 +82,9 @@ def test_version_with_update_and_helper(client: TestClient, app_settings: Settin
     assert body["update_available"] is True
     assert body["latest"] == "0.5.0"
     assert body["release_url"] == RELEASE_URL
+    assert body["release_name"] == "cobble 0.5.0"
+    assert body["published_at"] == "2026-09-24T00:17:27Z"
+    assert body["notes"] == "- new things"
     assert body["one_click_available"] is True
     assert body["manual_command"] is None
 
@@ -80,10 +92,13 @@ def test_version_with_update_and_helper(client: TestClient, app_settings: Settin
 def test_check_contacts_the_release_source(client: TestClient) -> None:
     runtime = client.app.state.runtime
     runtime.release_check._transport = httpx.MockTransport(
-        lambda _r: httpx.Response(200, json={"tag_name": "v0.5.0", "html_url": RELEASE_URL})
+        lambda _r: httpx.Response(
+            200, json={"tag_name": "v0.5.0", "html_url": RELEASE_URL, "body": "- notes"}
+        )
     )
     body = client.post("/api/cobble/check").json()
     assert body["latest"] == "0.5.0" and body["update_available"] is True
+    assert body["notes"] == "- notes"
 
 
 def test_upgrade_is_accepted_and_reported_pending(
@@ -95,6 +110,7 @@ def test_upgrade_is_accepted_and_reported_pending(
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["upgrade"]["state"] == "pending"
+    assert body["notes"] == "- new things"
     assert body["upgrade"]["from"] == "0.4.0" and body["upgrade"]["to"] == "0.5.0"
     request = app_settings.upgrade_request_dir / "request.json"
     assert json.loads(request.read_text())["tag"] == "v0.5.0"
