@@ -65,6 +65,9 @@ def test_release_tarball_is_wheel_plus_assets_no_frontend_source(tmp_path: Path)
     assert any(n.endswith(".whl") and "/dist/cobble-" in n for n in names)
     assert any(n.endswith("deploy/cobble.service") for n in names)
     assert any(n.endswith("deploy/install.sh") for n in names)
+    # cobble-self-update 5.3: the root upgrade helper and its units ship too.
+    for asset in ("cobble-upgrade", "cobble-upgrade.path", "cobble-upgrade.service"):
+        assert f"cobble/deploy/{asset}" in names, f"{asset} missing from the tarball"
     for n in names:
         assert "/web/" not in n, f"frontend dir leaked: {n}"
         assert not n.endswith((".tsx", ".ts")), f"TS source leaked: {n}"
@@ -98,3 +101,25 @@ def test_workflow_builds_frontend_and_guards_against_source_leak() -> None:
     assert "python -m build --wheel" in wf
     assert "frontend source leaked" in wf
     assert "missing the built frontend" in wf  # wheel-content sanity check
+
+
+def test_upgrade_units_are_wired_to_the_helper() -> None:
+    # cobble-self-update 5.2
+    path_unit = (REPO / "deploy" / "cobble-upgrade.path").read_text()
+    assert "PathExists=/var/lib/cobble/upgrade/request.json" in path_unit
+    assert "Unit=cobble-upgrade.service" in path_unit
+    assert "WantedBy=multi-user.target" in path_unit
+
+    svc = (REPO / "deploy" / "cobble-upgrade.service").read_text()
+    assert "Type=oneshot" in svc
+    assert "User=root" in svc
+    assert "ExecStart=/usr/bin/python3 /usr/local/libexec/cobble/cobble-upgrade" in svc
+    assert "cobble.service" not in "".join(
+        x for x in svc.splitlines() if x.startswith(("After=", "Requires=", "BindsTo=", "PartOf="))
+    )
+    # Only started by the path unit, never at boot on its own.
+    assert "[Install]" not in svc
+
+    helper = REPO / "deploy" / "cobble-upgrade"
+    assert helper.read_text().startswith("#!/usr/bin/python3\n")
+    assert helper.stat().st_mode & 0o111, "helper must be executable"

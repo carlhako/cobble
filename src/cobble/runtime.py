@@ -47,6 +47,8 @@ from cobble.maintenance.settings_store import MaintenanceSettingsStore
 from cobble.players.service import PlayerHistoryService
 from cobble.players.storage import PlayerHistoryError, PlayerStore, open_store
 from cobble.schedule import Scheduler
+from cobble.selfupdate.release_check import ReleaseChecker
+from cobble.selfupdate.upgrade import UpgradeService
 from cobble.settings import Settings
 from cobble.status.tracker import StatusTracker
 from cobble.supervisor.supervisor import Supervisor
@@ -190,6 +192,11 @@ class Runtime:
         )
         self.bus.subscribe(self.status.on_event)
 
+        # cobble's own release check (cobble-self-update spec): one shared,
+        # cached check against GitHub, started after bootstrap has had a head start.
+        self.release_check = ReleaseChecker(settings)
+        self.upgrade = UpgradeService(settings, self.supervisor, self.backup, self.release_check)
+
         self._app: FastAPI | None = None
         self._bootstrap_task: asyncio.Task[None] | None = None
 
@@ -233,6 +240,12 @@ class Runtime:
             # write any new event (server-players spec; tasks 4.2/4.3).
             self.player_history.reconcile()
             await self.player_history.start()
+
+        # First check ~30s after start, then on the interval; never blocks startup.
+        self.release_check.start()
+        # Follow an upgrade that was outstanding when cobble last stopped (the
+        # helper restarts cobble before it records the final outcome).
+        self.upgrade.start()
 
         # Bootstrap + restore run in the background: the app is servable at once.
         self._bootstrap_task = asyncio.create_task(
@@ -308,6 +321,10 @@ class Runtime:
 
     async def shutdown(self) -> None:
         log.info("cobble runtime stopping")
+        await self.release_check.stop()
+        # Before the supervisor closes: a cancelled wait leaves the pending
+        # upgrade on disk for the next start to reconcile.
+        await self.upgrade.stop()
         if self._bootstrap_task is not None:
             self._bootstrap_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):

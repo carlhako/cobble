@@ -394,6 +394,14 @@ class Supervisor:
         async with self._op_lock:
             await self._stop_locked(reason=reason)
 
+    def remember_running_for_restart(self) -> None:
+        """Record that the server should be running when cobble next starts.
+
+        For a maintenance operation that stops the server and then expects cobble
+        itself to be replaced (a cobble upgrade): the maintenance stop cleared the
+        desired state, and :meth:`restore` on the next start reads it back."""
+        self._persist_desired(running=True)
+
     async def maintenance_start(self) -> None:
         """Start issued by the maintenance operation that holds the flag.
         Bypasses the maintenance interlock; otherwise identical to :meth:`start`."""

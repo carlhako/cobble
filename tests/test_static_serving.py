@@ -42,3 +42,24 @@ def test_unknown_api_route_is_404_not_index(tmp_settings: Settings) -> None:
     with TestClient(app) as client:
         resp = client.get("/api/does-not-exist")
     assert resp.status_code == 404
+
+
+def test_index_is_not_cached_but_assets_are_left_alone(tmp_path) -> None:
+    # cobble-self-update 4.2: a reload after an upgrade must fetch the new shell.
+    from starlette.applications import Starlette
+
+    from cobble.staticfiles import SPAStaticFiles
+
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "index.html").write_text('<div id="root"></div>')
+    (tmp_path / "assets" / "app-abc123.js").write_text("console.log(1)")
+    app = Starlette()
+    app.mount("/", SPAStaticFiles(directory=tmp_path, html=True), name="spa")
+    with TestClient(app) as client:
+        for route in ("/", "/index.html", "/settings/deep/route"):
+            resp = client.get(route)
+            assert resp.status_code == 200, route
+            assert resp.headers["cache-control"] == "no-cache", route
+        asset = client.get("/assets/app-abc123.js")
+    assert asset.status_code == 200
+    assert "cache-control" not in asset.headers

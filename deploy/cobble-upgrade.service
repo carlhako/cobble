@@ -1,0 +1,17 @@
+[Unit]
+Description=cobble — install a requested cobble release
+Documentation=https://github.com/carlhako/cobble
+# Deliberately no dependency on cobble.service: the installer this runs
+# restarts cobble, and this unit must outlive that restart.
+
+[Service]
+Type=oneshot
+User=root
+# The system python3, never cobble's venv: the venv is what gets replaced.
+# The helper only accepts a release tag from the request, fetches that release
+# from the repository fixed at install time, and verifies its sha256 digests
+# before running its installer (see the helper's header).
+ExecStart=/usr/bin/python3 /usr/local/libexec/cobble/cobble-upgrade
+# apt, the download, the venv build, and cobble's clean Bedrock shutdown (up to
+# TimeoutStopSec=180 in cobble.service) all happen inside this run.
+TimeoutStartSec=20min

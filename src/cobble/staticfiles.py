@@ -6,6 +6,11 @@ take over, rather than a 404. Requests for files that do exist (``/assets/...``)
 are served normally. Non-interface prefixes (``/api``, ``/health``, ``/docs``,
 ``/openapi.json``) never fall back — they keep their real 404 so a mistyped API
 path is not masked by the SPA.
+
+``index.html`` (directly, as ``/``, or as the fallback) is sent with
+``Cache-Control: no-cache``: after a cobble upgrade the reloaded page must pick
+up the new hashed asset names rather than a cached shell pointing at the old
+ones. The hashed assets themselves keep normal caching.
 """
 
 from __future__ import annotations
@@ -24,14 +29,17 @@ class SPAStaticFiles(StaticFiles):
 
     async def get_response(self, path: str, scope: Scope):  # type: ignore[override]
         try:
-            return await super().get_response(path, scope)
+            response = await super().get_response(path, scope)
         except HTTPException as exc:
             if exc.status_code != 404:
                 raise
             normalised = path.lstrip("/")
             if normalised.startswith(_NON_SPA_PREFIXES):
                 raise
-            return await super().get_response("index.html", scope)
+            response = await super().get_response("index.html", scope)
+        if (response.media_type or "").startswith("text/html"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 def static_dir() -> Path:

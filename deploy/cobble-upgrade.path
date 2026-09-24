@@ -1,0 +1,13 @@
+[Unit]
+Description=cobble — watch for a requested cobble upgrade
+Documentation=https://github.com/carlhako/cobble
+
+# cobble (unprivileged) requests an upgrade by writing this file into its own
+# state directory. The helper renames it before doing anything, so the path
+# unit does not retrigger once the helper has run.
+[Path]
+PathExists=/var/lib/cobble/upgrade/request.json
+Unit=cobble-upgrade.service
+
+[Install]
+WantedBy=multi-user.target

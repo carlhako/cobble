@@ -438,6 +438,30 @@ export interface BanConfirmationRequired {
   would_exclude: string[];
 }
 
+/** The most recent cobble upgrade, in flight or finished (cobble-self-update). */
+export interface CobbleUpgrade {
+  state: "pending" | "running" | "succeeded" | "failed" | "rejected";
+  from: string | null;
+  to: string | null;
+  requested_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  log_tail: string | null;
+}
+
+/** cobble's own version and release-check state (GET /api/cobble/version). */
+export interface CobbleVersion {
+  current: string;
+  latest: string | null;
+  update_available: boolean;
+  release_url: string | null;
+  checked_at: string | null;
+  check_error: string | null;
+  one_click_available: boolean;
+  manual_command: string | null;
+  upgrade: CobbleUpgrade | null;
+}
+
 export const api = {
   start: () => request<StatusPayload>("POST", "/server/start"),
   stop: () => request<StatusPayload>("POST", "/server/stop"),
@@ -479,6 +503,11 @@ export const api = {
     request<MaintenanceSettingsWriteResult>("POST", "/maintenance/settings", {
       changes,
     }),
+
+  cobbleVersion: () => request<CobbleVersion>("GET", "/cobble/version"),
+  cobbleCheck: () => request<CobbleVersion>("POST", "/cobble/check"),
+  cobbleUpgrade: (version: string) =>
+    request<CobbleVersion>("POST", "/cobble/upgrade", { version }),
 
   players: () => request<Roster>("GET", "/players"),
   playerSessions: (xuid: string) =>
@@ -567,7 +596,7 @@ export interface OnlinePlayer {
 }
 
 export interface MaintenanceInfo {
-  operation: "updating" | "restoring" | "backing_up" | "importing";
+  operation: "updating" | "restoring" | "backing_up" | "importing" | "cobble_upgrade";
   step: string | null;
 }
 

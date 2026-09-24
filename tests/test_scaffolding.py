@@ -60,3 +60,45 @@ def test_env_overrides_toml(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("COBBLE_SHUTDOWN_TIMEOUT", "321")
     s = Settings()
     assert s.shutdown_timeout == 321.0
+
+
+def test_version_matches_pyproject() -> None:
+    # cobble-self-update 1.2: __version__ is what the header and release check
+    # compare against, so it must not drift from the packaged version.
+    import tomllib
+
+    import cobble
+
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    declared = tomllib.loads(pyproject.read_text())["project"]["version"]
+    assert cobble.__version__ == declared
+
+
+def test_user_agent_default_carries_the_running_version(monkeypatch) -> None:
+    # cobble-self-update 1.1
+    import cobble
+
+    monkeypatch.setenv("COBBLE_CONFIG_FILE", "/nonexistent/cobble.toml")
+    s = Settings()
+    assert s.user_agent == f"cobble/{cobble.__version__} (+https://github.com/carlhako/cobble)"
+
+
+def test_self_update_settings_defaults_and_env_overrides(monkeypatch) -> None:
+    # cobble-self-update 1.3
+    monkeypatch.setenv("COBBLE_CONFIG_FILE", "/nonexistent/cobble.toml")
+    s = Settings()
+    assert s.release_repo == "carlhako/cobble"
+    assert s.release_api_url == "https://api.github.com"
+    assert s.release_check_enabled is True
+    assert s.release_check_interval_hours == 12.0
+    assert s.upgrade_helper_path == Path("/usr/local/libexec/cobble/cobble-upgrade")
+    assert s.upgrade_status_dir == Path("/var/lib/cobble-upgrade")
+    assert s.upgrade_request_dir == Path("/var/lib/cobble/upgrade")
+
+    monkeypatch.setenv("COBBLE_RELEASE_CHECK_ENABLED", "false")
+    monkeypatch.setenv("COBBLE_RELEASE_CHECK_INTERVAL_HOURS", "6")
+    monkeypatch.setenv("COBBLE_RELEASE_REPO", "someone/fork")
+    s = Settings()
+    assert s.release_check_enabled is False
+    assert s.release_check_interval_hours == 6.0
+    assert s.release_repo == "someone/fork"

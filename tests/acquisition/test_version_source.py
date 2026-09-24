@@ -82,3 +82,15 @@ def test_client_helper_sets_user_agent_header(tmp_settings: Settings) -> None:
     with _client(tmp_settings) as c:
         assert c.headers["user-agent"] == tmp_settings.user_agent
     assert isinstance(_client(tmp_settings), httpx.Client)
+
+
+def test_default_user_agent_sent_to_vendor_names_the_running_version(
+    tmp_settings: Settings, fake_vendor
+) -> None:
+    # cobble-self-update 1.1: the default identifier carries the running version.
+    import cobble
+
+    s = tmp_settings.model_copy(update={"download_links_url": fake_vendor.links_url})
+    resolve_current_version(s)
+    for _, headers in fake_vendor.requests:
+        assert f"cobble/{cobble.__version__}" in headers["User-Agent"]

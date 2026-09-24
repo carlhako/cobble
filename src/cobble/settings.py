@@ -21,6 +21,8 @@ from typing import Any
 from pydantic import Field
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
+from cobble import __version__
+
 DEFAULT_CONFIG_FILE = Path("/etc/cobble/cobble.toml")
 
 
@@ -119,10 +121,10 @@ class Settings(BaseSettings):
 
     # --- Acquisition --------------------------------------------------
     user_agent: str = Field(
-        default="cobble/0.1 (+https://github.com/cobble)",
+        default=f"cobble/{__version__} (+https://github.com/carlhako/cobble)",
         description=(
-            "User-Agent sent on every request to the vendor download source. The vendor "
-            "rejects requests without one."
+            "User-Agent sent on every outbound request (the vendor download source and "
+            "the cobble release check). The vendor rejects requests without one."
         ),
     )
     download_links_url: str = Field(
@@ -184,6 +186,49 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- cobble self-update (cobble-self-update spec) ------------------
+    release_repo: str = Field(
+        default="carlhako/cobble",
+        description="GitHub repository (owner/name) whose releases are checked for a newer cobble.",
+    )
+    release_api_url: str = Field(
+        default="https://api.github.com",
+        description="Base URL of the GitHub REST API used by the release check.",
+    )
+    release_check_enabled: bool = Field(
+        default=True,
+        description=(
+            "Periodically check GitHub for a newer cobble release. Disable on hosts "
+            "with no internet access; the version is still shown, with no update state."
+        ),
+    )
+    release_check_interval_hours: float = Field(
+        default=12.0,
+        gt=0.0,
+        description="Hours between release checks after the first one shortly after start.",
+    )
+    upgrade_helper_path: Path = Field(
+        default=Path("/usr/local/libexec/cobble/cobble-upgrade"),
+        description=(
+            "The root-owned upgrade helper installed by install.sh. Its presence (with "
+            "upgrade_status_dir) means one-click upgrade is available."
+        ),
+    )
+    upgrade_status_dir: Path = Field(
+        default=Path("/var/lib/cobble-upgrade"),
+        description="Root-owned directory where the upgrade helper writes status.json.",
+    )
+    upgrade_timeout_seconds: float = Field(
+        default=1500.0,
+        ge=1.0,
+        description=(
+            "How long cobble waits for the upgrade helper to finish before giving up, "
+            "releasing maintenance, and restoring the server's run state. Keep it above "
+            "cobble-upgrade.service's TimeoutStartSec (20 min), or cobble gives up on a "
+            "helper that is still installing."
+        ),
+    )
+
     console_buffer_lines: int = Field(
         default=2000,
         ge=1,
@@ -222,6 +267,11 @@ class Settings(BaseSettings):
     @property
     def runtime_state_file(self) -> Path:
         return self.state_dir / "runtime.json"
+
+    @property
+    def upgrade_request_dir(self) -> Path:
+        """Where cobble drops an upgrade request for the root helper's path unit."""
+        return self.state_dir / "upgrade"
 
     @property
     def player_db_file(self) -> Path:

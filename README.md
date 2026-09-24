@@ -85,10 +85,44 @@ joinable on the LAN immediately. Turn the allowlist on from the console
 
 Open `http://<server-ip>/` in a browser on the LAN.
 
+### Upgrading cobble
+
+The header shows the running version beside the name, e.g. `[0.5.0]`, in green.
+When a newer release is out on GitHub it turns orange and reads
+`[0.5.0 update available]`. Click it to open the release notes.
+
+To upgrade, open **Updates & Backups → Settings** and use **Upgrade** on the
+cobble card. cobble takes a verified backup, then hands the request to a small
+root helper (`cobble-upgrade.service`, installed by the script). The helper
+downloads exactly that release, checks it against the sha256 digests GitHub
+publishes, and re-runs its installer. The Bedrock server stops for the backup
+and comes back once the new cobble has started. Players are disconnected for
+that time. The page reloads itself onto the new version, and the card shows
+the outcome. The full log is in `journalctl -u cobble-upgrade`.
+
+**Installs of v0.4.0 and earlier** don't have the helper yet. Upgrade those once
+by re-running the installer as root on the container. After that, one-click
+upgrades work:
+
+```
+curl -fsSL https://github.com/carlhako/cobble/releases/latest/download/install.sh | bash
+```
+
+Re-running the installer is always a safe in-place upgrade. It leaves the world,
+the Bedrock installation, cobble's state and your backups alone. It builds the
+new virtualenv beside the old one and switches over only once the new cobble
+answers. If it doesn't come up, the previous version is restored. To go back to
+an older release, pin it: `RELEASE_TAG=v0.4.0 bash install.sh`.
+
+With no internet access, set `COBBLE_RELEASE_CHECK_ENABLED=false` in
+`/etc/cobble/cobble.env` to turn off the release check.
+
 ## Filesystem layout
 
 ```
 /opt/cobble/venv/         virtualenv with cobble + deps installed (bundle included)
+/usr/local/libexec/cobble/cobble-upgrade   root-owned upgrade helper (run by cobble-upgrade.service)
+/var/lib/cobble-upgrade/  root-owned; the helper's status.json, readable by cobble
 /srv/bedrock/
     versions/<version>/   extracted BDS — pure vendor payload, one directory per version
     current -> versions/… symlink naming the active version (the only thing an update swaps)
@@ -100,6 +134,7 @@ Open `http://<server-ip>/` in a browser on the LAN.
         bedrock_server -> ../current/bedrock_server   vendor payload, symlinked in
         definitions -> ../current/definitions         …and every other payload entry
 /var/lib/cobble/          cobble's own durable state (backed up as a unit)
+    upgrade/              where cobble drops an upgrade request for the root helper
 /backup/                  backup destination (scheduled, pre-update, and on-demand backups)
 ```
 
@@ -130,6 +165,10 @@ Cobble runs with no config file present.
 | `COBBLE_BACKUP_RETENTION` | `7` | First-run seed for how many backups to keep. Older ones are pruned oldest-first; the most recent usable backup is never pruned. |
 | `COBBLE_UPDATE_GRACE_SECONDS` | `60` | After a new version signals readiness, seconds it must keep running before the update is called a success. An exit inside this window triggers automatic rollback. |
 | `COBBLE_PLAYER_HISTORY_CHECKPOINT_SECONDS` | `300` | How often the last-known-active time of each open player session is refreshed. Bounds the playtime a session can lose if cobble is killed without closing it — that session is closed at its last checkpoint on the next start. A clean stop or an observed exit still closes sessions exactly; this only backstops power loss. |
+| `COBBLE_RELEASE_CHECK_ENABLED` | `true` | Check GitHub for a newer cobble release about 30s after start and then periodically. Turn it off on hosts with no internet access. |
+| `COBBLE_RELEASE_CHECK_INTERVAL_HOURS` | `12` | Hours between release checks. |
+| `COBBLE_RELEASE_REPO` | `carlhako/cobble` | GitHub repository whose releases are checked. The upgrade helper uses the repository fixed at install time (`COBBLE_REPO` for the installer), not this setting. |
+| `COBBLE_UPGRADE_TIMEOUT_SECONDS` | `1500` | How long cobble waits for the upgrade helper before it gives up and restores the server. Keep it above the helper unit's 20-minute limit. |
 
 Set the server timezone explicitly (`timedatectl set-timezone …`) — scheduled
 maintenance runs in local wall-clock time. Each schedule's resolved next-run time

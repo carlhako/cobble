@@ -82,6 +82,37 @@ h2 {
   content: "▪ ";
   color: var(--accent);
 }
+.brand-group {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  white-space: nowrap;
+}
+/* cobble's own version (web-ui-shell): green when current, orange + linked when
+   a newer release exists, muted when availability is unknown. */
+.version-badge {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+.version-badge.is-current {
+  color: var(--accent);
+}
+a.version-badge.is-update {
+  color: var(--warn);
+  font-weight: 600;
+  text-decoration: none;
+}
+a.version-badge.is-update:hover {
+  text-decoration: underline;
+}
+.upgrade-banner {
+  background: var(--accent);
+  color: #fff;
+  padding: 0.5rem 1.25rem;
+  font-size: 0.88rem;
+  text-align: center;
+}
 .app-nav {
   display: flex;
   gap: 0.35rem;
@@ -606,4 +637,25 @@ a.btn {
     grid-template-columns: 1fr;
     grid-template-areas: "label" "control" "meta";
   }
+}
+
+/* -- cobble self-update card (Settings tab) -- */
+.cobble-card {
+  padding-bottom: 1rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.cobble-card h3 {
+  margin: 0 0 0.6rem;
+}
+.manual-upgrade code {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  overflow-x: auto;
+  max-width: 100%;
+  white-space: nowrap;
 }

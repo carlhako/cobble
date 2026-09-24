@@ -33,6 +33,12 @@ def tmp_settings(tmp_path: Path) -> Settings:
         crash_restart_window=5.0,
         bootstrap_on_start=False,
         download_links_url="http://127.0.0.1:9/never",
+        # Never reach GitHub or the real root helper from the suite; the
+        # release-check tests opt back in against a local fake.
+        release_check_enabled=False,
+        release_api_url="http://127.0.0.1:9",
+        upgrade_helper_path=tmp_path / "libexec" / "cobble-upgrade",
+        upgrade_status_dir=tmp_path / "var" / "lib" / "cobble-upgrade",
     )
 
 
