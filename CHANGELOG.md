@@ -5,6 +5,20 @@ workflow publishes that section as the GitHub release notes, which cobble shows
 on its own page before you upgrade. A tag without a section here is not
 published, so add the entry with the version bump.
 
+## 0.7.2 - 2026-09-25
+
+### Fixes
+
+- **Your own gamerule changes are no longer reported as made outside
+  cobble.** Changing a gamerule in the panel while the server ran, then
+  restarting the server or upgrading cobble, showed "A gamerule was changed
+  outside cobble" for that change. Cobble now keeps its record of the world's
+  gamerules up to date as you change them.
+- **Changes made in game are reported sooner.** A gamerule changed in game is
+  now picked up the next time the Gamerules page loads or you change a rule,
+  not only at the next restart. Several such changes build up in one report
+  until you acknowledge it.
+
 ## 0.7.1 - 2026-09-25
 
 ### What's new
