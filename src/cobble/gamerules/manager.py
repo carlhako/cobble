@@ -1,10 +1,18 @@
-"""The gamerule world manager: per-world records, readiness/pre-stop sampling,
-drift reconciliation, and the stopped-server view (server-gamerules spec).
+"""The gamerule world manager: per-world records, drift reconciliation, and the
+stopped-server view (server-gamerules spec).
 
-Wired in :mod:`cobble.runtime` to the event bus (server readiness) and the
-supervisor's pre-stop hook, the same way the player recorder is. Every storage
+Wired in :mod:`cobble.runtime` to the event bus (server readiness). Every storage
 failure is logged and swallowed: a gamerule problem never disturbs the server or
 the readiness path.
+
+The record is written at readiness (below), after every write cobble makes while
+the server runs, and on every live read that finds it out of date once that
+run's readiness reconcile has finished. A live read that diverges from the
+record is an adoption, exactly as at readiness; so is a divergence in any rule
+other than the one written that a write's re-read turns up. Nothing is sampled
+at stop: the record already holds the last set cobble read or wrote. One lock
+serialises all of these so a read that lands mid-write cannot mistake cobble's
+own write for an outside change (fix-gamerule-record-staleness design.md D1-D4).
 
 Readiness reconciliation (design.md D5, D6, D8) compares the live set against the
 per-world record and takes one of four branches:
@@ -35,6 +43,7 @@ from cobble.gamerules.parser import GameruleSet, set_from_values
 from cobble.gamerules.service import (
     GameruleService,
     GameruleUnavailableError,
+    GameruleUnconfirmedError,
     coerce_submit_value,
 )
 from cobble.gamerules.storage import (
@@ -52,6 +61,9 @@ from cobble.supervisor.supervisor import MaintenanceInProgressError, Supervisor
 log = get_logger("gamerules.manager")
 
 _DEFAULT_LEVEL_NAME = "Bedrock level"
+# How long a write while running waits for an in-flight readiness reconcile
+# before going ahead anyway (fix-gamerule-record-staleness design.md D2).
+_READINESS_WAIT = 10.0
 
 WorldNameFn = Callable[[], str]
 
@@ -136,8 +148,14 @@ class GameruleManager:
         self._on_report = on_report
         self._clock = clock
         self._tasks: set[asyncio.Task] = set()
-
-        supervisor.subscribe_pre_stop(self._on_pre_stop)
+        # Serialises every record-touching operation (design.md D1).
+        self._lock = asyncio.Lock()
+        # Set while no readiness reconcile is in flight; cleared on readiness.
+        self._readiness_done = asyncio.Event()
+        self._readiness_done.set()
+        # Whether this run's readiness reconcile succeeded, so live reads may
+        # update the record (design.md D2).
+        self._run_reconciled = False
 
     # -- world identity ---------------------------------------
     def active_world(self) -> str:
@@ -158,14 +176,11 @@ class GameruleManager:
         """Bus callback (fast, non-raising). A readiness event triggers
         reconciliation on a task so the bus is never blocked."""
         if event.type is EventType.SERVER_READY:
+            # Synchronous, so it happens before the supervisor reaches RUNNING
+            # and before any live read or write can touch the record.
+            self._run_reconciled = False
+            self._readiness_done.clear()
             self._spawn(self.on_ready(), "cobble-gamerule-ready")
-
-    def _on_pre_stop(self, when: datetime) -> None:
-        # Best-effort, fire-and-forget: the server is about to go away and the
-        # start sample makes the record correct again (design.md D4).
-        if self._sup.state is not RunState.RUNNING:
-            return
-        self._spawn(self._safe_sample("pre_stop", when), "cobble-gamerule-prestop-sample")
 
     def _spawn(self, coro, name: str) -> None:
         task = asyncio.create_task(coro, name=name)
@@ -174,6 +189,12 @@ class GameruleManager:
 
     # -- readiness reconciliation (task 4.1) -----------------
     async def on_ready(self) -> ReconcileOutcome:
+        try:
+            return await self._on_ready()
+        finally:
+            self._readiness_done.set()
+
+    async def _on_ready(self) -> ReconcileOutcome:
         try:
             # The readiness event fires from the stdout pump *before* the
             # supervisor transitions to RUNNING, and console queries are refused
@@ -190,6 +211,16 @@ class GameruleManager:
             return ReconcileOutcome(self.active_world(), Classification.STORAGE_ERROR)
 
     async def reconcile(self) -> ReconcileOutcome:
+        async with self._lock:
+            outcome = await self._reconcile()
+        if outcome.classification not in (
+            Classification.UNAVAILABLE,
+            Classification.STORAGE_ERROR,
+        ):
+            self._run_reconciled = True
+        return outcome
+
+    async def _reconcile(self) -> ReconcileOutcome:
         world = self.active_world()
         try:
             live = await self._service.read_live()
@@ -216,7 +247,7 @@ class GameruleManager:
                 if restored:
                     outcome = await self._repair(world, live, record.values, diverged, now)
                 elif diverged:
-                    outcome = await self._adopt(world, live, diverged, now)
+                    outcome = self._adopt(world, live, diverged, now)
                 else:
                     self._store.write_record(world, live.value_map(), now)
                     outcome = ReconcileOutcome(world, Classification.BASELINE)
@@ -254,13 +285,19 @@ class GameruleManager:
         self._record_report(world, REPORT_DEFAULTS, applied, now)
         return ReconcileOutcome(world, Classification.DEFAULTS, applied)
 
-    async def _adopt(
+    def _adopt(
         self, world: str, live: GameruleSet, diverged: dict[str, RuleValue], now: datetime
     ) -> ReconcileOutcome:
         # Store the live values; the server is left exactly as the operator set
         # it — nothing is written back (task 4.2).
         self._store.write_record(world, live.value_map(), now)
-        self._record_report(world, REPORT_ADOPTION, diverged, now)
+        # An adoption the operator has not acknowledged yet is extended, not
+        # replaced, so a rule it named is not dropped before it is seen.
+        prior = self._store.read_report(world)
+        reported = diverged
+        if prior is not None and prior.kind == REPORT_ADOPTION:
+            reported = {**prior.rules, **diverged}
+        self._record_report(world, REPORT_ADOPTION, reported, now)
         return ReconcileOutcome(world, Classification.ADOPTION, diverged)
 
     async def _repair(
@@ -278,8 +315,19 @@ class GameruleManager:
 
         put_back = {name: recorded[name] for name in diverged if name in recorded}
         await self._safe_apply(put_back, live)
-        # The record already holds the correct values; keep them, refresh nothing
-        # about their content.
+        try:
+            fresh = await self._service.read_live()
+        except GameruleUnavailableError:
+            # The server went away mid-repair: keep the recorded values as the
+            # record, since they are still the ones intended.
+            pass
+        else:
+            # A value the server refused is still live as the restore left it.
+            # Record what is in effect, so the first live read does not take it
+            # for an in-game change, and report only what was put back.
+            in_effect = fresh.value_map()
+            self._store.write_record(world, in_effect, now)
+            put_back = {n: v for n, v in put_back.items() if in_effect.get(n) == v}
         self._record_report(world, REPORT_REPAIR, put_back, now)
         return ReconcileOutcome(world, Classification.REPAIR, put_back)
 
@@ -325,14 +373,20 @@ class GameruleManager:
         pre-validated and queued as the intended value for the active world, to
         be applied at the next start (task 5.5) — no command is issued.
         """
-        if self._sup.maintenance is not None:
-            raise MaintenanceInProgressError(
-                f"a {self._sup.maintenance} operation is in progress"
-            )
-        world = self.active_world()
+        self._refuse_during_maintenance()
         if self._sup.state is RunState.RUNNING:
-            rules = await self._service.write(name, value)
-            return WriteResult(queued=False, level_name=world, rules=rules)
+            # Let an in-flight readiness reconcile decide first, so this write
+            # cannot pre-empt a repair or first-sight defaults (design.md D2).
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._readiness_done.wait(), _READINESS_WAIT)
+        async with self._lock:
+            # Checked again: maintenance may have begun, or the server stopped,
+            # while this write waited for readiness or the lock.
+            self._refuse_during_maintenance()
+            world = self.active_world()
+            if self._sup.state is RunState.RUNNING:
+                rules = await self._write_running(world, name, value)
+                return WriteResult(queued=False, level_name=world, rules=rules)
 
         # Stopped: validate against the catalogue (raises GameruleRefusedError),
         # then queue it.
@@ -344,6 +398,43 @@ class GameruleManager:
         return WriteResult(
             queued=True, level_name=world, rules=None, pending={canonical: coerced}
         )
+
+    def _refuse_during_maintenance(self) -> None:
+        if self._sup.maintenance is not None:
+            raise MaintenanceInProgressError(
+                f"a {self._sup.maintenance} operation is in progress"
+            )
+
+    async def _write_running(self, world: str, name: str, value: object) -> GameruleSet:
+        """Send the write and bring the record up to date with it. Caller holds
+        the lock."""
+        try:
+            rules = await self._service.write(name, value)
+        except GameruleUnconfirmedError as exc:
+            # The server most likely took the value but the re-read was lost.
+            # Record it anyway, so it is never reported as an outside change.
+            self._record_written_value(world, exc.rule, exc.submit_value)
+            raise
+        if self._run_reconciled:
+            # The written rule is cobble's own change; any other divergence the
+            # re-read turns up was made in game and is adopted.
+            rule = lookup(name)
+            self._absorb_live(world, rules, exclude=rule.name if rule else name.strip())
+        else:
+            # Readiness has not decided yet (or could not): take the re-read as
+            # the record, at worst a baseline taken early (design.md D2).
+            self._safe_write_record(world, rules)
+        return rules
+
+    def _record_written_value(self, world: str, name: str, submit_value: str) -> None:
+        try:
+            record = self._store.read_record(world)
+            if record is None:
+                return
+            values = {**record.values, name: _typed_value(lookup(name), submit_value)}
+            self._store.write_record(world, values, self._clock())
+        except GameruleStorageError:
+            log.exception("storing an unconfirmed gamerule write for %r failed", world)
 
     def pending_writes(self, level_name: str | None = None) -> dict[str, RuleValue]:
         try:
@@ -378,34 +469,25 @@ class GameruleManager:
             "report": report.to_dict() if report is not None else None,
         }
 
-    # -- sampling (tasks 3.3, 3.4) -------------------------
-    async def sample_and_store(self, *, reason: str, at: datetime | None = None) -> bool:
-        world = self.active_world()
-        try:
-            live = await self._service.read_live()
-        except GameruleUnavailableError as exc:
-            log.info("gamerule sample (%s) skipped for %r: %s", reason, world, exc)
-            return False
-        try:
-            self._store.write_record(world, live.value_map(), at or self._clock())
-        except GameruleStorageError:
-            log.exception("storing the gamerule record for %r failed (%s)", world, reason)
-            return False
-        log.info("gamerule record for %r updated (%s)", world, reason)
-        return True
-
-    async def _safe_sample(self, reason: str, when: datetime) -> None:
-        with contextlib.suppress(Exception):
-            await self.sample_and_store(reason=reason, at=when)
-
     # -- the current view (task 3.5) ----------------------
     async def current_view(self) -> GameruleView:
         world = self.active_world()
-        report = self._safe_read_report(world)
 
         if self._sup.state is RunState.RUNNING:
             try:
-                live = await self._service.read_live()
+                if self._run_reconciled:
+                    async with self._lock:
+                        live = await self._service.read_live()
+                        # Checked again: a new readiness may have arrived while
+                        # this read waited for the lock.
+                        if self._run_reconciled:
+                            self._absorb_live(world, live)
+                else:
+                    # Before readiness has decided, the record is not touched,
+                    # so there is nothing to wait for (design.md D2).
+                    live = await self._service.read_live()
+                # Read after reconciling so a report just made is included.
+                report = self._safe_read_report(world)
                 return GameruleView(
                     level_name=world,
                     liveness=Liveness.LIVE,
@@ -416,6 +498,7 @@ class GameruleManager:
             except GameruleUnavailableError:
                 log.info("live gamerule read failed for %r; serving the record", world)
 
+        report = self._safe_read_report(world)
         rec = self._safe_read_record(world)
         if rec is None:
             return GameruleView(world, Liveness.UNREAD, None, GameruleSet(rules=()), report)
@@ -426,6 +509,31 @@ class GameruleManager:
             rules=set_from_values(rec.values),
             report=report,
         )
+
+    def _absorb_live(self, world: str, live: GameruleSet, *, exclude: str | None = None) -> None:
+        """Bring the record up to date with a live set read after readiness.
+        A divergence in any rule but ``exclude`` (cobble's own write) is adopted.
+        Repair and defaults are readiness-only decisions, so after readiness the
+        only unexplained divergence is an outside change (design.md D3). A
+        matching set leaves the record alone: rewriting it would only move
+        ``last_read_at``, which makes the UI reload. Caller holds the lock."""
+        values = live.value_map()
+        try:
+            record = self._store.read_record(world)
+            if record is not None and record.values == values:
+                return
+            now = self._clock()
+            diverged = (
+                {n: v for n, v in _diff(record.values, values).items() if n != exclude}
+                if record is not None
+                else {}
+            )
+            if diverged:
+                self._adopt(world, live, diverged, now)
+            else:
+                self._store.write_record(world, values, now)
+        except GameruleStorageError:
+            log.exception("updating the gamerule record from a live read failed for %r", world)
 
     # -- preferred defaults (used by the API, section 5) --
     def read_defaults(self) -> dict[str, RuleValue]:
@@ -456,6 +564,12 @@ class GameruleManager:
         self._notify_report()
 
     # -- storage guards (task 3.6) -----------------------
+    def _safe_write_record(self, world: str, rules: GameruleSet) -> None:
+        try:
+            self._store.write_record(world, rules.value_map(), self._clock())
+        except GameruleStorageError:
+            log.exception("storing the gamerule record for %r failed", world)
+
     def _safe_read_record(self, world: str):
         try:
             return self._store.read_record(world)

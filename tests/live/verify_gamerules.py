@@ -7,6 +7,7 @@ operator console route (``/api/console/command``), which the gamerule service
 does not originate.
 
   7.2  read the set, write a rule, confirm by re-read, restart, value survives
+       and is not reported as a change made outside cobble
   7.3  a gamerule changed outside cobble is adopted and reported on next readiness
   7.4  a restore is followed by a repair, not an adoption
   7.5  the recorded Bedrock output formats still hold, and no bulk read or write
@@ -84,6 +85,7 @@ def acknowledge() -> None:
 def task_72(check: Checks) -> None:
     print("== 7.2: write a rule, confirm by re-read, survive a restart ==")
     assert wait_running(), "server is not running"
+    acknowledge()  # start from no report, so the check after the restart means something
     view = gamerules()
     check("live set is reported while running", view["liveness"] == "live")
     original = rule_value(view, "doInsomnia")
@@ -95,9 +97,14 @@ def task_72(check: Checks) -> None:
     check("GET reflects the new value", rule_value(gamerules(), "doInsomnia") == target)
 
     restart_and_wait()
+    view = gamerules()
     check(
         "the changed value survived a clean restart",
-        rule_value(gamerules(), "doInsomnia") == target,
+        rule_value(view, "doInsomnia") == target,
+    )
+    check(
+        "cobble's own write is not reported as a change made outside cobble",
+        view.get("report") is None,
     )
 
     # restore
@@ -142,8 +149,8 @@ def task_73(check: Checks) -> None:
 
 # -- 7.4 -------------------------------------------------------------
 def _set_and_settle(check: Checks, name: str, value: bool) -> None:
-    """Set a rule via the API, restart so a readiness folds it into the record,
-    and acknowledge the resulting adoption."""
+    """Set a rule via the API (which updates the record), restart so the world
+    carries it in level.dat, and clear any leftover report."""
     post("/api/gamerules", {"name": name, "value": value})
     restart_and_wait()
     acknowledge()

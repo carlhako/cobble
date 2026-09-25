@@ -11,6 +11,7 @@ from cobble.gamerules.service import (
     GameruleRefusedError,
     GameruleService,
     GameruleUnavailableError,
+    GameruleUnconfirmedError,
 )
 from cobble.supervisor.supervisor import NotRunningError
 from tests.gamerules.dump import DUMP_BODY
@@ -107,6 +108,20 @@ async def test_write_issues_set_then_bulk_read_never_a_single_rule_query() -> No
     for c in console.commands:
         assert c == "gamerule" or len(c.split(" ")) == 3
     assert result.get("mobGriefing").value is False  # from the re-read
+
+
+async def test_a_write_whose_reread_fails_is_unconfirmed_not_just_unavailable() -> None:
+    # The command is acknowledged, but the bulk read never comes back.
+    def respond(command: str) -> str | None:
+        if command == "gamerule keepInventory true":
+            return "[INFO] Game rule keepInventory has been updated to true"
+        return None
+
+    svc = GameruleService(FakeConsole(respond))  # type: ignore[arg-type]
+    with pytest.raises(GameruleUnconfirmedError) as info:
+        await svc.write("keepinventory", True)
+    assert (info.value.rule, info.value.submit_value) == ("keepInventory", "true")
+    assert isinstance(info.value, GameruleUnavailableError)  # still a 503 to the API
 
 
 async def test_reported_value_comes_from_the_reread_not_the_submission() -> None:

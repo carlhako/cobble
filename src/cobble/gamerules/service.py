@@ -47,6 +47,17 @@ class GameruleUnavailableError(GameruleError):
     code = "gamerule_unavailable"
 
 
+class GameruleUnconfirmedError(GameruleUnavailableError):
+    """A write was sent and not refused, but the re-read that confirms it did
+    not come back. The server most likely holds the new value; the caller
+    cannot see the rest of the set."""
+
+    def __init__(self, rule: str, submit_value: str) -> None:
+        super().__init__(f"{rule} was sent but the server did not return the gamerule set")
+        self.rule = rule
+        self.submit_value = submit_value
+
+
 class GameruleRefusedError(GameruleError):
     """A submitted value was refused — by cobble's pre-validation against the
     catalogue, or by the server itself (surfaced verbatim)."""
@@ -182,7 +193,10 @@ class GameruleService:
             raise GameruleRefusedError(canonical, _strip_prefix(reply))
 
         # Acknowledgement (if any) discarded; the re-read is authoritative.
-        return await self.read_live()
+        try:
+            return await self.read_live()
+        except GameruleUnavailableError as exc:
+            raise GameruleUnconfirmedError(canonical, submit_value) from exc
 
     async def apply_many(self, values: dict[str, object]) -> GameruleSet:
         """Send a ``gamerule <name> <value>`` write for each entry, then one

@@ -9,6 +9,7 @@ from cobble.gamerules.parser import GameruleSet, set_from_values
 from cobble.gamerules.service import (
     GameruleRefusedError,
     GameruleUnavailableError,
+    GameruleUnconfirmedError,
     coerce_submit_value,
 )
 from cobble.supervisor.state import RunState
@@ -35,7 +36,11 @@ class FakeSupervisor:
         self._pre_stop.append(fn)
 
     def fire_pre_stop(self, when: datetime | None = None) -> None:
+        # Like the real Supervisor.stop(): the state leaves RUNNING before any
+        # listener's queued work can run, so a listener cannot rely on a
+        # console query succeeding.
         when = when or datetime.now(UTC)
+        self.state = RunState.STOPPING
         for fn in list(self._pre_stop):
             fn(when)
 
@@ -49,6 +54,7 @@ class FakeGameruleService:
         self.reads = 0
         self.writes: list[tuple[str, object]] = []
         self.refuse: dict[str, str] = {}  # rule -> reason
+        self.lose_reread = False  # a write applies, but its re-read never returns
 
     async def read_live(self) -> GameruleSet:
         self.reads += 1
@@ -71,6 +77,8 @@ class FakeGameruleService:
             typed = int(submit_value)
         self.writes.append((canonical, typed))
         self.values[canonical] = typed
+        if self.lose_reread:
+            raise GameruleUnconfirmedError(canonical, submit_value)
         return set_from_values(self.values)
 
     async def apply_many(self, values: dict) -> GameruleSet:
