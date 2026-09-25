@@ -5,6 +5,16 @@ workflow publishes that section as the GitHub release notes, which cobble shows
 on its own page before you upgrade. A tag without a section here is not
 published, so add the entry with the version bump.
 
+## 0.7.1 - 2026-09-25
+
+### What's new
+
+- **The Gamerules page explains how changes apply.** A note at the top says
+  there's no Save button: a checkbox or choice applies on click, and a number
+  or text value applies when you leave the field. The command is sent quietly,
+  so it doesn't appear in the Console, and the value shown is read back from the
+  server. When the server is stopped, the change is queued for the next start.
+
 ## 0.7.0 - 2026-09-25
 
 ### What's new
