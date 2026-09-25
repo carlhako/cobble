@@ -463,6 +463,13 @@ export function Gamerules() {
   return (
     <section className={`section gamerules${stale ? " is-stale" : ""}`}>
       <h1>Gamerules</h1>
+      <p className="muted">
+        Changes apply as soon as you make them — there is no Save button. A checkbox or
+        choice applies on click; a number or text value applies when you leave the field. cobble sends
+        the command quietly, so it does not appear in the Console; the value shown is
+        read back from the server afterwards. If the server is stopped, the change is
+        queued and applied on the next start.
+      </p>
 
       {maintenance && (
         <div className="panel is-busy" role="status">
