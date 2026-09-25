@@ -32,6 +32,10 @@ well on any **Debian 12 or 13** VM or bare-metal install.
 
 ![Configuration](docs/screenshots/configuration.png)
 
+**Network** — the transport players connect over, its ports, and what to forward on your router.
+
+![Network](docs/screenshots/network.png)
+
 **Gamerules** — live gamerule editing for the loaded world.
 
 ![Gamerules](docs/screenshots/gamerules.png)
