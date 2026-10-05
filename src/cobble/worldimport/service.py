@@ -6,7 +6,7 @@ The destructive sequence mirrors :meth:`cobble.backup.service.BackupService._res
 exactly — a ``maintenance_scope``, a clean stop, a *verified* safety capture
 before anything is removed, the swap, the vendor-payload symlinks, and a return
 to the prior run state on every exit path. The only differences are the source
-(an operator zip, not a cobble tarball) and the target (one world directory, not
+(an operator world archive, not a cobble backup) and the target (one world directory, not
 all of ``data/``).
 """
 
@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import shutil
-import zipfile
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -24,12 +23,13 @@ from cobble.acquisition.layout import Layout
 from cobble.acquisition.version import is_newer
 from cobble.backup.artifact import BackupError
 from cobble.backup.capture import capture_archive, verify_archive
-from cobble.backup.service import BackupService, _replace_dir_contents
+from cobble.backup.service import BackupConflictError, BackupService, _replace_dir_contents
 from cobble.logging import get_logger
 from cobble.settings import Settings
 from cobble.supervisor.state import RunState
 from cobble.supervisor.supervisor import Supervisor
 from cobble.worldimport.archive import (
+    KIND_BACKUP,
     ArchiveError,
     inspect,
     open_archive,
@@ -94,6 +94,9 @@ class ImportOutcome:
     needs_confirmation: bool = False
     warning: str | None = None
     error: str | None = None
+    # A cobble backup was applied as a full restore; cobble restarts to run on
+    # the restored state (import-backup-archive design.md D5).
+    restarting: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -104,6 +107,7 @@ class ImportOutcome:
             "needs_confirmation": self.needs_confirmation,
             "warning": self.warning,
             "error": self.error,
+            "restarting": self.restarting,
         }
 
 
@@ -146,8 +150,8 @@ class ImportService:
         if cached is not None:
             return cached
         try:
-            with open_archive(archive) as zf:
-                payload = {"ok": True, "inspection": inspect(zf).to_dict()}
+            with open_archive(archive) as reader:
+                payload = {"ok": True, "inspection": inspect(reader).to_dict()}
         except ArchiveError as exc:
             payload = {"ok": False, "error": str(exc)}
         self.slot.store_inspection(payload)
@@ -205,6 +209,15 @@ class ImportService:
         available = self._free_bytes()
         if available < required:
             raise InsufficientSpaceError(required, available, what="hold the upload")
+
+    def _check_restore_space(self, archive_uncompressed: int) -> None:
+        """A full restore extracts the whole backup while a capture of all of
+        ``data/`` and cobble's state exists beside it."""
+        current = _dir_size(self._layout.data_dir) + _dir_size(self._settings.state_dir)
+        required = max(0, archive_uncompressed) + current + _SPACE_MARGIN
+        available = self._free_bytes()
+        if available < required:
+            raise InsufficientSpaceError(required, available, what="apply the backup")
 
     def _check_apply_space(self, world_uncompressed: int, level_name: str) -> None:
         """The extracted world plus a capture of the world being replaced exist
@@ -317,7 +330,13 @@ class ImportService:
                 False, now, "", error=payload.get("error") or "the held archive cannot be applied"
             )
         insp: dict = payload["inspection"]
-        level_name = self._level_name()
+        if self._backup.restart_pending:
+            # A restore is staged for the next start; nothing else may apply.
+            raise BackupConflictError("restore")
+        is_backup = insp.get("kind") == KIND_BACKUP
+        level_name = (
+            (insp.get("world_name") or self._level_name()) if is_backup else self._level_name()
+        )
 
         gate = self._version_gate(
             insp.get("last_opened_version"), confirm_old_version, now, level_name
@@ -325,12 +344,41 @@ class ImportService:
         if gate is not None:
             return gate
 
+        size = int(insp.get("uncompressed_size") or 0)
         try:
-            self._check_apply_space(int(insp.get("uncompressed_size") or 0), level_name)
+            if is_backup:
+                self._check_restore_space(size)
+            else:
+                self._check_apply_space(size, level_name)
         except InsufficientSpaceError as exc:
             return ImportOutcome(False, now, level_name, error=str(exc))
 
+        if is_backup:
+            return await self._run_backup_restore(archive, insp, level_name)
         return await self._run_import(archive, insp, level_name)
+
+    async def _run_backup_restore(
+        self, archive: Path, insp: dict, level_name: str
+    ) -> ImportOutcome:
+        """A cobble backup is applied whole, through the same restore the
+        Backups page uses (world-import spec; design.md D3, D5)."""
+        captured = (insp.get("backup") or {}).get("captured_at")
+        label = f"the uploaded backup captured {captured}" if captured else "the uploaded backup"
+        try:
+            outcome = await self._backup.restore_file(archive, label=label, operation="importing")
+        finally:
+            # The held archive is discarded once an apply has run, whether it
+            # succeeded or failed (world-import spec; task 2.3).
+            self.slot.clear()
+        world = self._level_name() if outcome.ok else level_name
+        return ImportOutcome(
+            outcome.ok,
+            outcome.at,
+            world,
+            replaced_capture=outcome.replaced_capture,
+            error=outcome.error,
+            restarting=outcome.restarting,
+        )
 
     async def _run_import(self, archive: Path, insp: dict, level_name: str) -> ImportOutcome:
         now = self._clock().isoformat()
@@ -385,7 +433,7 @@ class ImportService:
                         dest_world,
                         self.slot.root / ".extract",
                     )
-                except (OSError, zipfile.BadZipFile, ArchiveError) as exc:
+                except (OSError, ArchiveError) as exc:
                     log.error("import failed partway: %s", exc)
                     await self._restore_run_state(handle, was_running)
                     return ImportOutcome(
@@ -435,26 +483,13 @@ class ImportService:
 def _extract_world(archive: Path, world_prefix: str, dest_world: Path, workdir: Path) -> None:
     """Extract only the located world subtree, rewrite ``levelname.txt`` to the
     destination directory name, and replace the destination's contents
-    (task 4.4 / design.md D2)."""
+    (task 4.4 / design.md D2). Works for either archive form."""
     shutil.rmtree(workdir, ignore_errors=True)
     workdir.mkdir(parents=True)
     try:
-        with zipfile.ZipFile(archive) as zf:
-            validate_members(zf, world_prefix, workdir)
-            for info in zf.infolist():
-                name = info.filename.replace("\\", "/")
-                if world_prefix and not name.startswith(world_prefix):
-                    continue
-                rel = name[len(world_prefix) :]
-                if not rel:
-                    continue
-                target = workdir / rel
-                if name.endswith("/"):
-                    target.mkdir(parents=True, exist_ok=True)
-                    continue
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(info) as src, open(target, "wb") as dst:
-                    shutil.copyfileobj(src, dst, 1 << 20)
+        with open_archive(archive) as reader:
+            validate_members(reader, world_prefix, workdir)
+            reader.extract(world_prefix, workdir)
         # The world's recorded display name follows the directory it lives in.
         (workdir / "levelname.txt").write_text(dest_world.name)
         _replace_dir_contents(workdir, dest_world)

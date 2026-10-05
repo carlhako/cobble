@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 from fastapi import FastAPI
 
+from cobble import restart
 from cobble.access.documents import AllowlistFile, PermissionsFile
 from cobble.access.enforcement import EnforcementTracker
 from cobble.access.service import AccessService
@@ -32,6 +33,7 @@ from cobble.acquisition.layout import Layout
 from cobble.acquisition.migration import LayoutMigration, MigrationError
 from cobble.acquisition.preflight import run_preflight
 from cobble.acquisition.version_source import try_resolve_current_version
+from cobble.backup.pending import PendingRestore
 from cobble.backup.service import BackupService
 from cobble.config.service import ConfigService
 from cobble.console.console import Console
@@ -318,6 +320,19 @@ class Runtime:
             )
         self.status.notify()
         return self.bootstrap
+
+    def request_restart(self, reason: str, *, delay: float = 1.0) -> None:
+        """Restart cobble's process shortly — after the response that reports
+        the restore has been sent (import-backup-archive design.md D7)."""
+        asyncio.get_running_loop().call_later(delay, restart.request, reason)
+
+    def after_pending_restore(self, pending: PendingRestore) -> None:
+        """Finish a restore staged by the previous process, now that the
+        restored stores are open: surface a failed swap, and mark the restored
+        world so the next readiness repairs its gamerules (design.md D5, D8)."""
+        self.backup.note_pending_restore(pending)
+        if pending.error is None and pending.level_name and self.gamerules is not None:
+            self.gamerules.mark_restored(pending.level_name)
 
     async def shutdown(self) -> None:
         log.info("cobble runtime stopping")

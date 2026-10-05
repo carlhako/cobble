@@ -337,3 +337,137 @@ async def test_second_inspect_does_not_reopen_the_archive(make_supervisor, monke
     second = svc.inspect_held()
     assert first == second
     assert calls["n"] == 1
+
+
+# -- import-backup-archive 3.1: a world-folder tarball imports like a zip --
+@pytest.mark.parametrize("form", ["zip", "tar"])
+async def test_world_folder_imports_identically_from_either_form(make_supervisor, form) -> None:
+    from ._fixtures import build_tar
+
+    sup: Supervisor = make_supervisor("1.99.0.1", shutdown_timeout=5.0)
+    svc, layout = _make(sup)
+    _seed_world(layout, "MyWorld", b"orig")
+    other = layout.data_dir / "worlds" / "Other"
+    other.mkdir(parents=True)
+    (other / "keep").write_bytes(b"other")
+    members = world_members("Some Folder/", level_dat=make_level_dat(version=[1, 99, 0, 1]))
+    members["Some Folder/imported-marker"] = b"IMPORTED"
+    members["server.properties"] = b"level-name=Elsewhere\n"
+    _stage_bytes(svc, build_tar(members) if form == "tar" else build_zip(members))
+
+    outcome = await svc.apply()
+    assert outcome.ok is True, outcome.error
+    dest = layout.data_dir / "worlds" / "MyWorld"
+    assert (dest / "imported-marker").read_bytes() == b"IMPORTED"
+    assert not (dest / "marker").exists()
+    assert (dest / "levelname.txt").read_text() == "MyWorld"
+    assert (dest / "db" / "CURRENT").is_file()
+    assert (other / "keep").read_bytes() == b"other"
+    assert "level-name=MyWorld" in (layout.data_dir / "server.properties").read_text()
+
+
+# -- import-backup-archive 4.5: a held cobble backup is a full restore ----
+def _stage_backup(svc: ImportService, *, version=(1, 99, 0, 1), worlds=("Source World",)) -> None:
+    from ._fixtures import backup_members, build_tar
+
+    members = backup_members(
+        worlds=worlds,
+        level_dat=make_level_dat(name="Source World", version=list(version)),
+        state={"maintenance_settings.json": b'{"backup_retention": 9}'},
+    )
+    for w in worlds:
+        members[f"data/worlds/{w}/imported-marker"] = b"FROM-BACKUP"
+    members["data/server.properties"] = f"level-name={worlds[0] if worlds else 'x'}\n".encode()
+    _stage_bytes(svc, build_tar(members))
+
+
+async def test_a_held_backup_is_applied_as_a_full_restore(make_supervisor) -> None:
+    from cobble.backup.pending import apply_pending_state
+
+    sup: Supervisor = make_supervisor("1.99.0.1", shutdown_timeout=5.0)
+    svc, layout = _make(sup)
+    _seed_world(layout, "Dest World", b"orig")
+    (layout.state_dir / "backup_history.json").write_text('["dest"]')
+    _stage_backup(svc)
+    await sup.start()
+
+    outcome = await svc.apply()
+    assert outcome.ok is True, outcome.error
+    assert outcome.restarting is True
+    assert outcome.replaced_capture is not None
+    assert outcome.world == "Source World"
+    # data/ is replaced now: world, server.properties, and other worlds alike.
+    assert "level-name=Source World" in (layout.data_dir / "server.properties").read_text()
+    world = layout.data_dir / "worlds" / "Source World"
+    assert (world / "imported-marker").read_bytes() == b"FROM-BACKUP"
+    assert not (layout.data_dir / "worlds" / "Dest World").exists()
+    assert svc.slot.held() is None
+    # cobble's state is applied at the next start, keeping instance-local files.
+    pending = apply_pending_state(layout.state_dir)
+    assert pending is not None and pending.was_running is True
+    assert "backup_retention" in (layout.state_dir / "maintenance_settings.json").read_text()
+    assert (layout.state_dir / "backup_history.json").read_text() == '["dest"]'
+
+
+async def test_a_newer_backup_is_refused_even_when_confirmed(make_supervisor) -> None:
+    sup: Supervisor = make_supervisor("1.99.0.1", shutdown_timeout=5.0)
+    svc, layout = _make(sup)
+    _seed_world(layout, "Dest World", b"orig")
+    _stage_backup(svc, version=(2, 0, 0, 0))
+
+    outcome = await svc.apply(confirm_old_version=True)
+    assert outcome.ok is False and outcome.needs_confirmation is False
+    assert "2.0.0.0" in outcome.error and "1.99.0.1" in outcome.error
+    assert (layout.data_dir / "worlds" / "Dest World" / "marker").read_bytes() == b"orig"
+
+
+async def test_an_older_backup_needs_confirmation(make_supervisor) -> None:
+    sup: Supervisor = make_supervisor("1.99.0.1", shutdown_timeout=5.0)
+    svc, layout = _make(sup)
+    _seed_world(layout, "Dest World", b"orig")
+    _stage_backup(svc, version=(1, 0, 0, 0))
+
+    first = await svc.apply()
+    assert first.ok is False and first.needs_confirmation is True
+    assert (layout.data_dir / "worlds" / "Dest World" / "marker").read_bytes() == b"orig"
+    confirmed = await svc.apply(confirm_old_version=True)
+    assert confirmed.ok is True and confirmed.restarting is True
+
+
+async def test_a_backup_with_two_worlds_is_refused(make_supervisor) -> None:
+    sup: Supervisor = make_supervisor("1.99.0.1", shutdown_timeout=5.0)
+    svc, layout = _make(sup)
+    _seed_world(layout, "Dest World", b"orig")
+    _stage_backup(svc, worlds=("A", "B"))
+
+    assert "2 Bedrock worlds" in svc.describe()["refusal"]
+    outcome = await svc.apply()
+    assert outcome.ok is False and "2 Bedrock worlds" in outcome.error
+    assert (layout.data_dir / "worlds" / "Dest World" / "marker").read_bytes() == b"orig"
+
+
+async def test_a_backup_refused_for_space_stops_nothing(make_supervisor, monkeypatch) -> None:
+    sup: Supervisor = make_supervisor("1.99.0.1", shutdown_timeout=5.0)
+    svc, layout = _make(sup)
+    _seed_world(layout, "Dest World", b"orig")
+    _stage_backup(svc)
+    await sup.start()
+    monkeypatch.setattr(svc, "_free_bytes", lambda: 1)
+
+    outcome = await svc.apply()
+    assert outcome.ok is False and "insufficient space to apply the backup" in outcome.error
+    assert sup.state is RunState.RUNNING
+    await sup.stop()
+
+
+async def test_nothing_applies_while_a_restore_awaits_the_restart(make_supervisor) -> None:
+    from cobble.backup.service import BackupConflictError
+
+    sup: Supervisor = make_supervisor("1.99.0.1", shutdown_timeout=5.0)
+    svc, layout = _make(sup)
+    _seed_world(layout, "Dest World", b"orig")
+    _stage_backup(svc)
+    assert (await svc.apply()).ok is True
+    _stage(svc, "worlds/W/")
+    with pytest.raises(BackupConflictError):
+        await svc.apply()

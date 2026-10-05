@@ -7,6 +7,7 @@ import {
   type ImportOutcome,
   type ImportView,
 } from "../api/client";
+import { RestartingPanel, useCobbleRestart } from "../api/useCobbleRestart";
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -27,18 +28,31 @@ const MAINTENANCE_LABEL: Record<string, string> = {
   importing: "An import",
 };
 
+function fmtWhen(iso: string | null | undefined): string {
+  if (!iso) return "unknown";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
 /** 6.4 — what cobble found in the held archive. */
 function InspectionPanel({ view }: { view: ImportView }) {
   const insp = view.inspection;
   if (!insp) return null;
+  const isBackup = insp.kind === "backup";
   return (
     <div className="panel">
-      <h2>Archive contents</h2>
+      <h2>{isBackup ? "Cobble backup" : "Archive contents"}</h2>
       <div className="cards">
         <div className="card">
           <div className="card-label">World</div>
           <div className="card-value">{insp.world_name ?? "(unnamed)"}</div>
         </div>
+        {isBackup && (
+          <div className="card">
+            <div className="card-label">Captured</div>
+            <div className="card-value">{fmtWhen(insp.backup?.captured_at)}</div>
+          </div>
+        )}
         <div className="card">
           <div className="card-label">Size</div>
           <div className="card-value">{fmtBytes(insp.uncompressed_size)}</div>
@@ -52,7 +66,13 @@ function InspectionPanel({ view }: { view: ImportView }) {
           <div className="card-value">{insp.last_opened_version ?? "unknown"}</div>
         </div>
       </div>
-      {insp.extra_server_files.length > 0 && (
+      {isBackup ? (
+        <p className="muted" role="note">
+          This is a backup from cobble. Applying it restores everything it holds — the world,
+          the server configuration, allowlist, and permissions, and cobble's own settings and
+          player history — not just the world. This cobble keeps its own list of backups.
+        </p>
+      ) : insp.extra_server_files.length > 0 && (
         <p className="muted" role="note">
           The archive also contains {insp.extra_server_files.join(", ")}. These are
           present but will not be imported — the server keeps its own configuration,
@@ -78,6 +98,7 @@ function ConfirmPanel({
   onCancel: () => void;
 }) {
   const installing = view.inspection?.world_name ?? "the archived world";
+  const isBackup = view.inspection?.kind === "backup";
   if (stage === "old") {
     return (
       <div className="panel is-warn confirm-restore" role="alertdialog" aria-label="confirm older-world import">
@@ -89,7 +110,31 @@ function ConfirmPanel({
         </p>
         <div className="controls-row">
           <button className="btn btn-stop" disabled={working} onClick={onConfirm}>
-            {working ? "Importing…" : "Upgrade and import anyway"}
+            {working ? "Importing…" : isBackup ? "Upgrade and restore anyway" : "Upgrade and import anyway"}
+          </button>
+          <button className="btn" disabled={working} onClick={onCancel}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+  if (isBackup) {
+    return (
+      <div className="panel is-warn confirm-restore" role="alertdialog" aria-label="confirm backup restore">
+        <strong>Restore this backup?</strong>
+        <p>
+          Everything on this server is replaced by the backup: the world (
+          <code>{installing}</code>), the server configuration, allowlist, and permissions, and
+          cobble's settings and player history.
+        </p>
+        <ul className="muted">
+          <li>The server will be stopped, and cobble restarts to load the restored state.</li>
+          <li>A backup of the current state is captured first, so the restore can be undone.</li>
+        </ul>
+        <div className="controls-row">
+          <button className="btn btn-stop" disabled={working} onClick={onConfirm}>
+            {working ? "Restoring…" : "Stop the server and restore"}
           </button>
           <button className="btn" disabled={working} onClick={onCancel}>
             Cancel
@@ -135,6 +180,7 @@ export function ImportWorld() {
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<ImportOutcome | null>(null);
+  const restart = useCobbleRestart();
 
   const reload = useCallback(async () => {
     try {
@@ -186,6 +232,11 @@ export function ImportWorld() {
         setOutcome(result);
         setConfirmStage(null);
         if (!result.ok) setApplyError(result.error ?? "import failed");
+        if (result.ok && result.restarting) {
+          // cobble is about to go away; reloading the view would only fail.
+          restart.begin();
+          return;
+        }
       }
       await reload();
     } catch (e) {
@@ -214,15 +265,16 @@ export function ImportWorld() {
         <h2>Upload a world archive</h2>
         <p className="muted">
           Importing replaces <code>{view?.current_world ?? "the world the server currently loads"}</code>.
-          The archive may be a full server backup, a zipped world folder, or a
-          <code>.mcworld</code> export.
+          The archive may be a full server backup, a zipped or <code>.tar.gz</code> world folder,
+          or a <code>.mcworld</code> export. A <code>.tar.gz</code> backup downloaded from cobble
+          restores everything it holds, settings included.
         </p>
         <input
           ref={fileRef}
           type="file"
           aria-label="world archive"
-          accept=".zip,.mcworld"
-          disabled={progress !== null || importInFlight}
+          accept=".zip,.mcworld,.tar.gz,.tgz"
+          disabled={progress !== null || importInFlight || restart.restarting}
           onChange={onFile}
         />
         {progress !== null && (
@@ -288,7 +340,7 @@ export function ImportWorld() {
                     disabled={!canApply || !!blockingOp || importInFlight}
                     onClick={() => setConfirmStage("primary")}
                   >
-                    Import this world
+                    {view.inspection.kind === "backup" ? "Restore this backup" : "Import this world"}
                   </button>
                   <button
                     className="btn"
@@ -312,7 +364,9 @@ export function ImportWorld() {
         </div>
       )}
 
-      {outcome && (
+      {restart.restarting && <RestartingPanel what="the restored backup" />}
+
+      {outcome && !restart.restarting && (
         <div className={`panel ${outcome.ok ? "is-ok" : "is-error"}`} role="status">
           {outcome.ok ? (
             <>

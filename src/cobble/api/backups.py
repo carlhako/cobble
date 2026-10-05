@@ -78,6 +78,9 @@ def build_backups_router(runtime: Runtime) -> APIRouter:
             raise conflict(exc.code, str(exc)) from exc
         except (MaintenanceConflictError, SupervisorError) as exc:
             raise conflict(getattr(exc, "code", "conflict"), str(exc)) from exc
+        if outcome.restarting:
+            # Cobble's state is staged for the next start (design.md D5).
+            runtime.request_restart(f"restored {archive}")
         return outcome.to_dict()
 
     return router

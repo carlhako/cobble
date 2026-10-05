@@ -37,10 +37,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def health() -> JSONResponse:
         return JSONResponse({"status": "ok", "version": __version__})
 
+    # A restore staged cobble's state for this start: swap it into place before
+    # any service opens its store (import-backup-archive design.md D5).
+    from cobble.backup.pending import apply_pending_state
+
+    pending = apply_pending_state(settings.state_dir)
+
     # API routers are registered by the runtime wiring in cobble.runtime.
     from cobble.runtime import Runtime
 
     runtime = Runtime(settings)
+    if pending is not None:
+        runtime.after_pending_restore(pending)
     app.state.runtime = runtime
     runtime.attach(app)
 

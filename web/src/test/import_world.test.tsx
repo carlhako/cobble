@@ -310,3 +310,85 @@ describe("Import World section", () => {
     expect(screen.getByRole("button", { name: "Import this world" })).toBeDisabled();
   });
 });
+
+// -- import-backup-archive 6.1 / 6.2 ------------------------------------
+const HELD_BACKUP = {
+  held: true,
+  refusal: null,
+  current_world: "Bedrock level",
+  inspection: {
+    form: "tar",
+    kind: "backup",
+    world_name: "Family World",
+    world_prefix: "data/worlds/Family World/",
+    uncompressed_size: 64 * 1024 * 1024,
+    seed: "42",
+    last_opened_version: "1.26.43.1",
+    extra_server_files: ["server.properties", "allowlist.json", "permissions.json"],
+    backup: { captured_at: "2026-10-01T03:00:00+00:00", bedrock_version: "1.26.43.1" },
+  },
+  version: { installed: "1.26.43.1", world: "1.26.43.1", relation: "same", importable: true },
+};
+
+describe("Import World — cobble backups", () => {
+  it("6.1 accepts .tar.gz and .tgz as well as zip and .mcworld", async () => {
+    mockFetch({ "GET /api/import": EMPTY_VIEW });
+    renderApp(<ImportWorld />);
+    const input = await screen.findByLabelText("world archive");
+    expect(input).toHaveAttribute("accept", ".zip,.mcworld,.tar.gz,.tgz");
+    expect(screen.getByText(/downloaded from cobble/i)).toBeInTheDocument();
+  });
+
+  it("6.1 a held backup says it replaces everything, with its capture time", async () => {
+    mockFetch({ "GET /api/import": HELD_BACKUP });
+    renderApp(<ImportWorld />);
+    expect(await screen.findByRole("heading", { name: "Cobble backup" })).toBeInTheDocument();
+    expect(screen.getByText("Captured")).toBeInTheDocument();
+    expect(screen.getByText("Family World")).toBeInTheDocument();
+    const note = screen.getByRole("note");
+    expect(note).toHaveTextContent(/restores everything/i);
+    expect(note).toHaveTextContent(/player history/i);
+    expect(note).not.toHaveTextContent(/will not be imported/i);
+
+    await userEvent.click(screen.getByRole("button", { name: "Restore this backup" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "confirm backup restore" });
+    expect(dialog).toHaveTextContent(/configuration, allowlist, and permissions/i);
+    expect(dialog).toHaveTextContent(/cobble restarts/i);
+  });
+
+  it("6.1 a world archive keeps the world-only wording", async () => {
+    mockFetch({
+      "GET /api/import": {
+        ...HELD_OLDER,
+        inspection: { ...HELD_OLDER.inspection, kind: "world", form: "tar", backup: null },
+      },
+    });
+    renderApp(<ImportWorld />);
+    expect(await screen.findByRole("heading", { name: "Archive contents" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Import this world" })).toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent(/will not be imported/i);
+  });
+
+  it("6.2 a completed backup restore shows cobble restarting", async () => {
+    mockFetch({
+      "GET /api/import": HELD_BACKUP,
+      "POST /api/import/apply": {
+        ok: true,
+        at: "t",
+        world: "Family World",
+        replaced_capture: "cobble-backup-SAFETY.tar.gz",
+        needs_confirmation: false,
+        warning: null,
+        error: null,
+        restarting: true,
+      },
+    });
+    renderApp(<ImportWorld />);
+    await userEvent.click(await screen.findByRole("button", { name: "Restore this backup" }));
+    await userEvent.click(screen.getByRole("button", { name: "Stop the server and restore" }));
+    expect(
+      await screen.findByRole("status", { name: "cobble restarting" }),
+    ).toHaveTextContent(/Cobble is restarting/);
+    expect(screen.getByLabelText("world archive")).toBeDisabled();
+  });
+});

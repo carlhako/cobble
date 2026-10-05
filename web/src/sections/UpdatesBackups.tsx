@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useStatus } from "../api/StatusContext";
+import { RestartingPanel, useCobbleRestart } from "../api/useCobbleRestart";
 import {
   ApiCallError,
   api,
@@ -619,6 +620,7 @@ function BackupsPanel({ busy }: { busy: boolean }) {
     entry: BackupEntry;
     warning: string;
   } | null>(null);
+  const restart = useCobbleRestart();
 
   const reload = useCallback(async () => {
     try {
@@ -656,6 +658,10 @@ function BackupsPanel({ busy }: { busy: boolean }) {
         setConfirmOld({ entry, warning: r.warning });
       } else if (!r.ok) {
         setErr(r.error ?? "restore failed");
+      } else if (r.restarting) {
+        // cobble restarts to load the restored state (design.md D7).
+        restart.begin();
+        return;
       }
       await reload();
     } catch (e) {
@@ -666,6 +672,15 @@ function BackupsPanel({ busy }: { busy: boolean }) {
       setConfirmOld(null);
     }
   };
+
+  if (restart.restarting) {
+    return (
+      <div className="panel">
+        <h2>Backups</h2>
+        <RestartingPanel what="the restored backup" />
+      </div>
+    );
+  }
 
   return (
     <div className="panel">

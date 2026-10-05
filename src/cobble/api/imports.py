@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, Body, Depends, Request
 
 from cobble.api._shared import auth_guard, conflict
+from cobble.backup.service import BackupConflictError
 from cobble.supervisor.supervisor import MaintenanceConflictError, SupervisorError
 from cobble.worldimport.service import InsufficientSpaceError
 
@@ -51,8 +52,14 @@ def build_imports_router(runtime: Runtime) -> APIRouter:
     async def apply(confirm_old_version: bool = Body(default=False, embed=True)) -> dict:
         try:
             outcome = await runtime.imports.apply(confirm_old_version=confirm_old_version)
+        except BackupConflictError as exc:
+            raise conflict(exc.code, str(exc)) from exc
         except (MaintenanceConflictError, SupervisorError) as exc:
             raise conflict(getattr(exc, "code", "conflict"), str(exc)) from exc
+        if outcome.restarting:
+            # A cobble backup was applied whole; its state is staged for the
+            # next start (import-backup-archive design.md D5).
+            runtime.request_restart("applied an uploaded backup")
         return outcome.to_dict()
 
     return router

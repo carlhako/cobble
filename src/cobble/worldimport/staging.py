@@ -1,12 +1,12 @@
 """The single upload staging slot (section 2, design.md D8).
 
 One fixed path under ``<state_dir>/import-staging/`` holds at most one archive.
-An upload is written to ``upload.partial`` and renamed to ``upload.zip`` on
-completion, so an interrupted transfer is never offered as applicable. A new
+An upload is written to ``upload.partial`` and renamed to ``upload.archive``
+on completion, so an interrupted transfer is never offered as applicable. A new
 upload replaces the slot; an apply or a discard clears it; a sweep at startup
 discards anything left from a previous run. The inspection result is cached
 beside the archive, keyed to its size and mtime, so repeated reads of a
-multi-gigabyte zip do not rescan it (task 2.5).
+multi-gigabyte archive do not rescan it (task 2.5).
 """
 
 from __future__ import annotations
@@ -21,7 +21,9 @@ from cobble.logging import get_logger
 
 log = get_logger("worldimport.staging")
 
-_ARCHIVE = "upload.zip"
+# Neutral name: the form (zip or gzip tar) is read from the content, and is
+# recorded in the cached inspection (import-backup-archive design.md D1).
+_ARCHIVE = "upload.archive"
 _PARTIAL = "upload.partial"
 _INSPECTION = "inspection.json"
 

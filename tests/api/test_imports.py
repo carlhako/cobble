@@ -126,7 +126,9 @@ def test_apply_success_returns_a_restore_shaped_outcome(client: TestClient) -> N
         "needs_confirmation",
         "warning",
         "error",
+        "restarting",
     } == set(body)
+    assert body["restarting"] is False  # a world-only import needs no restart
     dest = runtime.layout.data_dir / "worlds" / "Bedrock level"
     assert (dest / "imported-marker").read_bytes() == b"IMPORTED"
 
@@ -173,3 +175,52 @@ def test_apply_during_another_maintenance_op_is_a_409(client: TestClient) -> Non
         runtime.supervisor._maintenance = None
     assert resp.status_code == 409
     assert resp.json()["detail"]["error"] == "maintenance_conflict"
+
+
+# -- import-backup-archive 2.3: the archive's kind is reported -----------
+def test_get_reports_a_world_archive_kind(client: TestClient) -> None:
+    client.post("/api/import/upload", content=_archive_bytes())
+    insp = client.get("/api/import").json()["inspection"]
+    assert insp["kind"] == "world"
+    assert insp["form"] == "zip"
+    assert insp["backup"] is None
+
+
+def test_get_reports_a_cobble_backup_with_its_manifest(client: TestClient) -> None:
+    from ..worldimport._fixtures import backup_members, build_tar
+
+    client.post("/api/import/upload", content=build_tar(backup_members()))
+    insp = client.get("/api/import").json()["inspection"]
+    assert insp["kind"] == "backup"
+    assert insp["form"] == "tar"
+    assert insp["backup"] == {
+        "captured_at": "2026-10-01T03:00:00+00:00",
+        "bedrock_version": "1.26.43.1",
+    }
+
+
+# -- import-backup-archive 5.2: applying a backup restarts cobble ---------
+def test_applying_a_backup_reports_and_requests_a_restart(client: TestClient, monkeypatch) -> None:
+    from ..worldimport._fixtures import backup_members, build_tar
+
+    runtime = client.app.state.runtime
+    _seed_current_world(runtime)
+    requested: list[str] = []
+    monkeypatch.setattr(runtime, "request_restart", lambda reason, **kw: requested.append(reason))
+    level = make_level_dat(version=[1, 2, 3, 4])
+    client.post("/api/import/upload", content=build_tar(backup_members(level_dat=level)))
+
+    body = client.post("/api/import/apply", json={}).json()
+    assert body["ok"] is True, body
+    assert body["restarting"] is True
+    assert len(requested) == 1
+
+
+def test_a_world_import_requests_no_restart(client: TestClient, monkeypatch) -> None:
+    runtime = client.app.state.runtime
+    _seed_current_world(runtime)
+    requested: list[str] = []
+    monkeypatch.setattr(runtime, "request_restart", lambda reason, **kw: requested.append(reason))
+    client.post("/api/import/upload", content=_archive_bytes())
+    assert client.post("/api/import/apply", json={}).json()["ok"] is True
+    assert requested == []

@@ -22,6 +22,37 @@ CONTENT_DATA = "data"
 CONTENT_STATE = "cobble-state"
 CONTENTS: tuple[str, ...] = (CONTENT_DATA, CONTENT_STATE)
 
+# A completed restore stages the backup's cobble state here, beside a marker,
+# and the swap into ``state_dir`` happens at the next cobble start — before any
+# service opens its store (import-backup-archive design.md D5).
+PENDING_STATE_DIR = ".pending-state"
+PENDING_STATE_MARKER = ".pending-state.json"
+
+# Entries of ``state_dir`` that describe the host cobble runs on rather than the
+# server it manages. A restore keeps the destination's copies, whichever
+# instance the backup came from (design.md D6). Captures still include them.
+INSTANCE_LOCAL: tuple[str, ...] = (
+    "upgrade",
+    "upgrade_pending.json",
+    "upgrade_last.json",
+    "release_check.json",
+    "last_shutdown.json",
+    "runtime.json",
+    "layout_migration.json",
+    "import-staging",
+    "backup_history.json",
+    PENDING_STATE_DIR,
+    PENDING_STATE_MARKER,
+)
+
+# Entries of ``state_dir`` a capture never includes: an upload held for import
+# (possibly gigabytes, and transient) and a staged restore.
+CAPTURE_EXCLUDED_STATE: tuple[str, ...] = (
+    "import-staging",
+    PENDING_STATE_DIR,
+    PENDING_STATE_MARKER,
+)
+
 
 class BackupError(RuntimeError):
     """A backup could not be captured, read, or verified."""

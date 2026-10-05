@@ -11,7 +11,6 @@ import asyncio
 import errno
 import os
 import shutil
-import tarfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -21,6 +20,7 @@ from cobble.acquisition.layout import Layout
 from cobble.acquisition.version import is_newer
 from cobble.backup.artifact import CONTENT_DATA, CONTENT_STATE, BackupError, Manifest
 from cobble.backup.capture import capture_archive, verify_archive
+from cobble.backup.pending import PendingRestore, discard_pending, stage_state, write_marker
 from cobble.backup.records import BackupHistoryStore
 from cobble.backup.store import BackupEntry, BackupStore
 from cobble.logging import get_logger
@@ -52,6 +52,9 @@ class RestoreOutcome:
     needs_confirmation: bool = False
     warning: str | None = None
     error: str | None = None
+    # A completed restore staged cobble's state for the next start; cobble must
+    # restart to run on it (import-backup-archive design.md D5).
+    restarting: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -62,6 +65,7 @@ class RestoreOutcome:
             "needs_confirmation": self.needs_confirmation,
             "warning": self.warning,
             "error": self.error,
+            "restarting": self.restarting,
         }
 
 
@@ -126,21 +130,49 @@ def _replace_dir_contents(src: Path, target: Path) -> None:
         shutil.move(str(child), str(target / child.name))
 
 
-def _extract_over_layout(archive: Path, layout: Layout) -> None:
-    """Extract a backup archive and swap its ``data/`` and ``cobble-state/``
-    contents into the live layout."""
-    staging = layout.bedrock_root / ".restore-staging"
+def _extract_safely(archive: Path, staging: Path) -> None:
+    """Extract ``archive`` whole into a fresh ``staging`` through the archive
+    reader: no member may escape ``staging``, hard links and special files are
+    refused, and symlinks are never created — the vendor-payload links are
+    recreated by :meth:`Layout.ensure_payload_symlinks` (design.md D4)."""
+    from cobble.worldimport.archive import open_archive, validate_members
+
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(parents=True)
+    with open_archive(archive) as reader:
+        validate_members(reader, "", staging)
+        reader.extract("", staging)
+
+
+def _extract_over_layout(archive: Path, layout: Layout) -> None:
+    """Extract a backup archive and swap its ``data/`` and ``cobble-state/``
+    contents into the live layout. Used by the update rollback, which restores
+    the pre-update capture of this same instance."""
+    staging = layout.bedrock_root / ".restore-staging"
     try:
-        with tarfile.open(archive, mode="r:gz") as tar:
-            tar.extractall(staging, filter="tar")
+        _extract_safely(archive, staging)
         data_src = staging / CONTENT_DATA
         state_src = staging / CONTENT_STATE
         if data_src.is_dir():
             _replace_dir_contents(data_src, layout.data_dir)
         if state_src.is_dir():
             _replace_dir_contents(state_src, layout.state_dir)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def _stage_restore(archive: Path, layout: Layout) -> list[str]:
+    """An operator restore: swap ``data/`` into place now (the server is
+    stopped, nothing in cobble holds it) and stage ``cobble-state/`` for the
+    next cobble start (design.md D5). Returns the staged state entries."""
+    staging = layout.bedrock_root / ".restore-staging"
+    try:
+        _extract_safely(archive, staging)
+        data_src = staging / CONTENT_DATA
+        if not data_src.is_dir():
+            raise BackupError("the backup holds no data directory")
+        _replace_dir_contents(data_src, layout.data_dir)
+        return stage_state(staging / CONTENT_STATE, layout.state_dir)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
@@ -176,6 +208,9 @@ class BackupService:
         self._history = history or BackupHistoryStore(settings.state_dir / "backup_history.json")
         self.store = BackupStore(layout.backup_dir)
         self._busy: str | None = None
+        # Set once a restore has staged cobble's state: no further backup or
+        # restore may run until cobble restarts and applies it.
+        self._restart_pending = False
         self._health: str | None = None
         self._last: BackupOutcome | None = None
 
@@ -184,21 +219,46 @@ class BackupService:
         the runtime wires this once the gamerule manager exists."""
         self._on_restored = callback
 
+    def _restored_level_name(self) -> str:
+        from cobble.config.properties import PropertiesDocument
+
+        props = self._layout.data_dir / "server.properties"
+        name = ""
+        if props.is_file():
+            name = (PropertiesDocument.load(props).effective().get("level-name") or "").strip()
+        return name or "Bedrock level"
+
     def _note_restored_world(self) -> None:
         if self._on_restored is None:
             return
         try:
-            from cobble.config.properties import PropertiesDocument
-
-            props = self._layout.data_dir / "server.properties"
-            name = ""
-            if props.is_file():
-                name = (PropertiesDocument.load(props).effective().get("level-name") or "").strip()
-            self._on_restored(name or "Bedrock level")
+            self._on_restored(self._restored_level_name())
         except Exception:
             log.exception("could not record the restored world for gamerules")
 
+    @property
+    def restart_pending(self) -> bool:
+        return self._restart_pending
+
+    def note_pending_restore(self, pending: PendingRestore) -> None:
+        """Called at startup with the result of applying a staged restore: a
+        failed swap is surfaced as the destination's health (design.md D8)."""
+        if pending.error is None:
+            return
+        where = (
+            f"; the state replaced by it is saved as {pending.replaced_capture}"
+            if pending.replaced_capture
+            else ""
+        )
+        self._health = f"restoring {pending.label} did not complete: {pending.error}{where}"
+
     # -- observation ---------------------------------------------
+    def _refuse_if_busy(self) -> None:
+        if self._busy is not None:
+            raise BackupConflictError(self._busy)
+        if self._restart_pending:
+            raise BackupConflictError("restore")
+
     @property
     def health(self) -> str | None:
         """An unhealthy-destination reason, or ``None`` when backups are healthy."""
@@ -236,8 +296,7 @@ class BackupService:
         condition and the server is left untouched (task 3.9). Raises
         :class:`BackupConflictError` if a capture or restore is already running.
         """
-        if self._busy is not None:
-            raise BackupConflictError(self._busy)
+        self._refuse_if_busy()
         self._busy = "backup"
         try:
             return await self._capture(reason)
@@ -248,16 +307,21 @@ class BackupService:
         """Swap a backup archive's contents into the live layout, without
         touching the server. For the update state machine's rollback (task 6.7),
         which already holds a maintenance scope and has the server stopped.
-        Raises :class:`BackupError` if the archive is missing or unverifiable,
-        ``OSError``/``tarfile.TarError`` if extraction fails."""
+        Raises :class:`BackupError` if the archive is missing, unverifiable, or
+        unsafe to extract, ``OSError`` if extraction fails."""
         entry = self.store.get(archive_name)
         if entry is None or not entry.restorable:
             raise BackupError(
                 f"cannot restore {archive_name}: {entry.reason if entry else 'not found'}"
             )
-        await asyncio.to_thread(
-            _extract_over_layout, self._layout.backup_dir / archive_name, self._layout
-        )
+        from cobble.worldimport.archive import ArchiveError
+
+        try:
+            await asyncio.to_thread(
+                _extract_over_layout, self._layout.backup_dir / archive_name, self._layout
+            )
+        except ArchiveError as exc:
+            raise BackupError(str(exc)) from exc
         self._layout.ensure_payload_symlinks()
         self._note_restored_world()
 
@@ -358,14 +422,15 @@ class BackupService:
     ) -> RestoreOutcome:
         """Restore a captured backup over the live installation (tasks 5.1-5.4).
 
-        Stops the server cleanly, captures the state being replaced, swaps the
-        backup contents into place, and starts again. Refuses if the server
+        Stops the server cleanly, captures the state being replaced, puts the
+        backup's ``data/`` in place and stages its cobble state for the next
+        cobble start; the caller then restarts cobble (``restarting`` on the
+        outcome; import-backup-archive design.md D5). Refuses if the server
         cannot be stopped cleanly, leaving existing state untouched (5.2). If
         the backup predates the installed version, returns
         ``needs_confirmation`` unless ``confirm_old_version`` is set (5.3).
         """
-        if self._busy is not None:
-            raise BackupConflictError(self._busy)
+        self._refuse_if_busy()
 
         entry = self.store.get(archive_name)
         now = self._clock().isoformat()
@@ -390,18 +455,25 @@ class BackupService:
                 ),
             )
 
+        return await self.restore_file(self._layout.backup_dir / archive_name, label=archive_name)
+
+    async def restore_file(
+        self, archive: Path, *, label: str, operation: str = "restoring"
+    ) -> RestoreOutcome:
+        """Restore from any cobble backup archive on disk — a held backup or one
+        uploaded from another instance. Version gating is the caller's; the
+        archive is extracted defensively either way (design.md D4, D5)."""
+        self._refuse_if_busy()
         self._busy = "restore"
         try:
-            return await self._restore(entry)
+            return await self._restore_from(archive, label=label, operation=operation)
         finally:
             self._busy = None
 
-    async def _restore(self, entry: BackupEntry) -> RestoreOutcome:
-        assert entry.manifest is not None
-        archive_name = entry.manifest.archive
+    async def _restore_from(self, archive: Path, *, label: str, operation: str) -> RestoreOutcome:
         now = self._clock().isoformat()
 
-        async with self._sup.maintenance_scope("restoring") as handle:
+        async with self._sup.maintenance_scope(operation) as handle:
             was_running = self._sup.state is RunState.RUNNING
             if was_running:
                 handle.set_step("stopping server")
@@ -415,58 +487,76 @@ class BackupService:
                         await self._sup.maintenance_start()
                     msg = "server could not be stopped cleanly; nothing was replaced"
                     log.error("restore refused: %s", msg)
-                    return RestoreOutcome(False, now, archive_name, error=msg)
+                    return RestoreOutcome(False, now, label, error=msg)
 
             handle.set_step("capturing the state being replaced")
-            replaced = await asyncio.to_thread(
-                capture_archive,
-                self._layout,
-                self._layout.backup_dir,
-                bedrock_version=self._sup.installed_version(),
-                shutdown_clean=(self._sup.last_shutdown.clean if self._sup.last_shutdown else None),
-                now=self._clock(),
-            )
             try:
+                replaced = await asyncio.to_thread(
+                    capture_archive,
+                    self._layout,
+                    self._layout.backup_dir,
+                    bedrock_version=self._sup.installed_version(),
+                    shutdown_clean=(
+                        self._sup.last_shutdown.clean if self._sup.last_shutdown else None
+                    ),
+                    now=self._clock(),
+                )
                 await asyncio.to_thread(
                     verify_archive, self._layout.backup_dir / replaced.archive, replaced
                 )
-            except BackupError as exc:
+            except (OSError, BackupError) as exc:
                 await self._restore_run_state(handle, was_running)
                 return RestoreOutcome(
                     False,
                     now,
-                    archive_name,
+                    label,
                     error=f"could not capture a safety copy of the current state: {exc}",
                 )
 
             handle.set_step("putting the backup in place")
+            from cobble.worldimport.archive import ArchiveError
+
             try:
-                await asyncio.to_thread(
-                    _extract_over_layout, self._layout.backup_dir / archive_name, self._layout
+                entries = await asyncio.to_thread(_stage_restore, archive, self._layout)
+                self._layout.ensure_payload_symlinks()
+                level_name = self._restored_level_name()
+                write_marker(
+                    self._layout.state_dir,
+                    entries=entries,
+                    label=label,
+                    level_name=level_name,
+                    replaced_capture=replaced.archive,
+                    was_running=was_running,
                 )
-            except (OSError, tarfile.TarError) as exc:
-                # 5.4 the replaced state is still captured in `replaced`.
+            except (OSError, BackupError, ArchiveError) as exc:
+                # 5.4 the replaced state is still captured in `replaced`; nothing
+                # half-staged is left for the next start to apply (D8).
                 log.error("restore failed partway: %s", exc)
+                discard_pending(self._layout.state_dir)
+                self._layout.ensure_payload_symlinks()
                 await self._restore_run_state(handle, was_running)
                 return RestoreOutcome(
                     False,
                     now,
-                    archive_name,
+                    label,
                     replaced_capture=replaced.archive,
                     error=f"restore failed partway through: {exc}; "
                     f"the replaced state is saved as {replaced.archive}",
                 )
 
-            self._layout.ensure_payload_symlinks()
+            # From here cobble's state is staged: nothing may capture or restore
+            # again until the restart applies it. The server stays stopped; the
+            # next cobble start returns it to `was_running` (design.md D5).
+            self._restart_pending = True
             await asyncio.to_thread(self.store.prune, self.effective_retention())
-            self._note_restored_world()
-            await self._restore_run_state(handle, was_running)
             log.info(
-                "restore complete: %s (replaced state saved as %s)",
-                archive_name,
+                "restore staged: %s (replaced state saved as %s); cobble restarts to apply it",
+                label,
                 replaced.archive,
             )
-            return RestoreOutcome(True, now, archive_name, replaced_capture=replaced.archive)
+            return RestoreOutcome(
+                True, now, label, replaced_capture=replaced.archive, restarting=True
+            )
 
     async def capture_pre_migration(self, version_dir: Path) -> BackupOutcome:
         """Capture a verified backup of a pre-separation (M1) installation whose
@@ -476,8 +566,7 @@ class BackupService:
         the result is a normal restorable backup. The server must already be
         stopped (migration runs before any start).
         """
-        if self._busy is not None:
-            raise BackupConflictError(self._busy)
+        self._refuse_if_busy()
         self._busy = "backup"
         try:
             probe = await asyncio.to_thread(probe_destination, self._layout.backup_dir)

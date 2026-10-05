@@ -95,6 +95,8 @@ export interface RestoreResult {
   needs_confirmation: boolean;
   warning: string | null;
   error: string | null;
+  /** The restore completed and cobble is restarting to run on it. */
+  restarting?: boolean;
 }
 
 // --- Backup / version history, maintenance settings -----------------
@@ -165,6 +167,12 @@ export interface ImportInspection {
   seed: string | null;
   last_opened_version: string | null;
   extra_server_files: string[];
+  /** Recognised from the content: zip (incl. .mcworld) or gzip tar. */
+  form?: "zip" | "tar";
+  /** A world archive imports one world; a cobble backup restores everything. */
+  kind?: "world" | "backup";
+  /** A cobble backup's embedded manifest. */
+  backup?: { captured_at: string | null; bedrock_version: string | null } | null;
 }
 
 export interface ImportVersionRelation {
@@ -191,6 +199,8 @@ export interface ImportOutcome {
   needs_confirmation: boolean;
   warning: string | null;
   error: string | null;
+  /** The restore completed and cobble is restarting to run on it. */
+  restarting?: boolean;
 }
 
 /** Streamed archive upload with byte-level progress.

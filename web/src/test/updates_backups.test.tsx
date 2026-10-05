@@ -498,3 +498,45 @@ describe("Maintenance tabs (task 7)", () => {
     ).toBeInTheDocument();
   });
 });
+
+// -- import-backup-archive 6.2: a completed restore restarts cobble -------
+it("6.2 a completed restore shows cobble restarting", async () => {
+  mockFetch({
+    "GET /api/backups": {
+      backups: [
+        {
+          archive: "cobble-backup-20260601T040000.000000Z.tar.gz",
+          captured_at: "2026-06-01T04:00:00",
+          bedrock_version: "1.0.0.1",
+          shutdown_clean: true,
+          size_bytes: 2048,
+          restorable: true,
+          reason: null,
+        },
+      ],
+      unhealthy: null,
+    },
+    "POST /api/backups/cobble-backup-20260601T040000.000000Z.tar.gz/restore": {
+      ok: true,
+      at: "x",
+      archive: "cobble-backup-20260601T040000.000000Z.tar.gz",
+      replaced_capture: "cobble-backup-later.tar.gz",
+      needs_confirmation: false,
+      warning: null,
+      error: null,
+      restarting: true,
+    },
+  });
+  renderApp(<UpdatesBackups />);
+  await waitFor(() => expect(FakeEventSource.byUrl("/api/status/stream")).toBeTruthy());
+  push(BASE);
+  expect(await screen.findByText("1.0.0.1", { selector: "td" })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Restore" }));
+  const dialog = await screen.findByRole("alertdialog", { name: "confirm restore" });
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: /replace current state and restore/i }),
+  );
+  expect(
+    await screen.findByRole("status", { name: "cobble restarting" }),
+  ).toHaveTextContent(/Cobble is restarting/);
+});

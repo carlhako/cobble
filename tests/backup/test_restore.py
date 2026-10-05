@@ -12,7 +12,8 @@ import pytest
 
 import cobble.backup.service as service_mod
 from cobble.acquisition.layout import Layout
-from cobble.backup.service import BackupService
+from cobble.backup.pending import apply_pending_state, marker_path
+from cobble.backup.service import BackupConflictError, BackupService
 from cobble.supervisor.state import RunState
 from cobble.supervisor.supervisor import Supervisor
 
@@ -66,10 +67,17 @@ async def test_restore_from_running_returns_to_running(make_supervisor) -> None:
 
     outcome = await svc.restore(captured.archive)
 
+    # The server stays stopped: the restart cobble now performs brings it back,
+    # because the staged restore records that it was running (design.md D5).
     assert outcome.ok is True
-    assert sup.state is RunState.RUNNING
+    assert outcome.restarting is True
+    assert sup.state is not RunState.RUNNING
     assert sup.maintenance is None
-    await sup.stop()
+    pending = apply_pending_state(layout.state_dir)
+    assert pending is not None and pending.was_running is True
+    assert json.loads((layout.state_dir / "runtime.json").read_text()) == {
+        "desired_running": True
+    }
 
 
 async def test_restore_refused_when_server_cannot_stop_cleanly(make_supervisor) -> None:
@@ -138,7 +146,7 @@ async def test_restore_that_fails_partway_keeps_the_replaced_state_recoverable(
     def boom(archive, layout):
         raise OSError("simulated mid-restore failure")
 
-    monkeypatch.setattr(service_mod, "_extract_over_layout", boom)
+    monkeypatch.setattr(service_mod, "_stage_restore", boom)
     outcome = await svc.restore(captured.archive)
 
     assert outcome.ok is False
@@ -167,7 +175,11 @@ async def test_completed_restore_notifies_the_restored_world_name(make_superviso
 
     outcome = await svc.restore(captured.archive)
     assert outcome.ok is True
-    assert restored == ["Family World"]
+    # The gamerule marker lives in cobble.db, which is staged: it is set after
+    # the next start applies the staged state, not into the state being replaced.
+    assert restored == []
+    pending = apply_pending_state(layout.state_dir)
+    assert pending is not None and pending.level_name == "Family World"
 
 
 async def test_failed_restore_does_not_notify(make_supervisor) -> None:
@@ -190,3 +202,94 @@ async def test_failed_restore_does_not_notify(make_supervisor) -> None:
     assert outcome.ok is False
     assert restored == []
     await sup.stop()
+
+
+# -- import-backup-archive: deferred state swap (design.md D5, D6, D8) ------
+async def test_live_state_is_untouched_until_the_staged_restore_is_applied(
+    make_supervisor,
+) -> None:
+    sup: Supervisor = make_supervisor(shutdown_timeout=5.0)
+    layout = Layout.from_settings(sup._settings)
+    svc = _service(sup)
+    state = layout.state_dir
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "maintenance_settings.json").write_text('{"v": "captured"}')
+    (state / "backup_history.json").write_text('["captured-history"]')
+    _seed_world(layout, b"v1", "level-name=W\n")
+    captured = await svc.capture(reason="manual")
+
+    (state / "maintenance_settings.json").write_text('{"v": "live"}')
+    (state / "backup_history.json").write_text('["live-history"]')
+    (state / "added-later.json").write_text("{}")
+
+    outcome = await svc.restore(captured.archive)
+    assert outcome.ok is True
+    assert (state / "maintenance_settings.json").read_text() == '{"v": "live"}'
+    assert marker_path(state).is_file()
+
+    pending = apply_pending_state(state)
+    assert pending is not None and pending.error is None
+    assert (state / "maintenance_settings.json").read_text() == '{"v": "captured"}'
+    # Instance-local: the destination keeps its own backup history.
+    assert (state / "backup_history.json").read_text() == '["live-history"]'
+    assert not (state / "added-later.json").exists()
+    assert not marker_path(state).exists()
+    assert not (state / ".pending-state").exists()
+
+
+async def test_no_backup_or_restore_runs_while_a_restart_is_pending(make_supervisor) -> None:
+    sup: Supervisor = make_supervisor(shutdown_timeout=5.0)
+    layout = Layout.from_settings(sup._settings)
+    svc = _service(sup)
+    _seed_world(layout, b"v1", "x\n")
+    captured = await svc.capture(reason="manual")
+    assert (await svc.restore(captured.archive)).ok is True
+    assert svc.restart_pending is True
+
+    with pytest.raises(BackupConflictError):
+        await svc.capture(reason="manual")
+    with pytest.raises(BackupConflictError):
+        await svc.restore(captured.archive)
+
+
+async def test_a_failed_restore_stages_nothing_and_needs_no_restart(
+    make_supervisor, monkeypatch
+) -> None:
+    sup: Supervisor = make_supervisor(shutdown_timeout=5.0)
+    layout = Layout.from_settings(sup._settings)
+    svc = _service(sup)
+    _seed_world(layout, b"v1", "x\n")
+    captured = await svc.capture(reason="manual")
+    await sup.start()
+
+    def boom(archive, layout):
+        raise OSError("simulated mid-restore failure")
+
+    monkeypatch.setattr(service_mod, "_stage_restore", boom)
+    outcome = await svc.restore(captured.archive)
+    assert outcome.ok is False and outcome.restarting is False
+    assert not marker_path(layout.state_dir).exists()
+    assert svc.restart_pending is False
+    assert sup.state is RunState.RUNNING  # returned in-process, as before
+    await sup.stop()
+
+
+async def test_a_capture_leaves_out_a_held_upload_and_a_staged_restore(make_supervisor) -> None:
+    import tarfile
+
+    sup: Supervisor = make_supervisor(shutdown_timeout=5.0)
+    layout = Layout.from_settings(sup._settings)
+    svc = _service(sup)
+    _seed_world(layout, b"v1", "x\n")
+    state = layout.state_dir
+    (state / "import-staging").mkdir(parents=True, exist_ok=True)
+    (state / "import-staging" / "upload.archive").write_bytes(b"big upload")
+    (state / ".pending-state").mkdir()
+    (state / ".pending-state" / "x").write_text("x")
+    (state / "keep.json").write_text("{}")
+
+    captured = await svc.capture(reason="manual")
+    with tarfile.open(layout.backup_dir / captured.archive) as tar:
+        names = tar.getnames()
+    assert "cobble-state/keep.json" in names
+    assert not any("import-staging" in n or ".pending-state" in n for n in names)

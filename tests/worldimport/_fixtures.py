@@ -101,3 +101,73 @@ def reference_archive_bytes() -> bytes:
     members["permissions.json"] = b"[]\n"
     members["worlds/Bedrock level/behavior_packs/"] = b""
     return build_zip(members)
+
+
+def build_tar(
+    members: dict[str, bytes],
+    *,
+    symlinks: dict[str, str] | None = None,
+    hardlinks: dict[str, str] | None = None,
+    fifos: tuple[str, ...] = (),
+) -> bytes:
+    """A gzip-compressed tar of ``members`` plus optional link / special
+    entries, built in memory."""
+    import tarfile
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for arcname, data in members.items():
+            if arcname.endswith("/"):
+                ti = tarfile.TarInfo(arcname.rstrip("/"))
+                ti.type = tarfile.DIRTYPE
+                tar.addfile(ti)
+                continue
+            ti = tarfile.TarInfo(arcname)
+            ti.size = len(data)
+            tar.addfile(ti, io.BytesIO(data))
+        for arcname, target in (symlinks or {}).items():
+            ti = tarfile.TarInfo(arcname)
+            ti.type = tarfile.SYMTYPE
+            ti.linkname = target
+            tar.addfile(ti)
+        for arcname, target in (hardlinks or {}).items():
+            ti = tarfile.TarInfo(arcname)
+            ti.type = tarfile.LNKTYPE
+            ti.linkname = target
+            tar.addfile(ti)
+        for arcname in fifos:
+            ti = tarfile.TarInfo(arcname)
+            ti.type = tarfile.FIFOTYPE
+            tar.addfile(ti)
+    return buf.getvalue()
+
+
+def backup_members(
+    *,
+    worlds: tuple[str, ...] = ("Bedrock level",),
+    bedrock_version: str | None = "1.26.43.1",
+    level_dat: bytes | None = None,
+    state: dict[str, bytes] | None = None,
+) -> dict[str, bytes]:
+    """The member layout ``capture_archive`` produces: ``data/`` (worlds and
+    server files), ``cobble-state/``, and ``manifest.json``."""
+    import json
+
+    members: dict[str, bytes] = {"data/": b"", "cobble-state/": b""}
+    for w in worlds:
+        members.update(world_members(f"data/worlds/{w}/", level_dat=level_dat))
+    members["data/server.properties"] = b"level-name=Bedrock level\n"
+    members["data/allowlist.json"] = b"[]\n"
+    members["data/permissions.json"] = b"[]\n"
+    for name, data in (state or {"maintenance_settings.json": b"{}"}).items():
+        members[f"cobble-state/{name}"] = data
+    members["manifest.json"] = json.dumps(
+        {
+            "format": 1,
+            "captured_at": "2026-10-01T03:00:00+00:00",
+            "bedrock_version": bedrock_version,
+            "shutdown_clean": True,
+            "contents": ["data", "cobble-state"],
+        }
+    ).encode()
+    return members

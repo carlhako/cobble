@@ -183,3 +183,31 @@ def test_clear_failed_route_accepts_a_version_and_reports_cleared(client: TestCl
     assert resp.status_code == 200
     assert resp.json()["cleared"] == ["9.9.9.9"]
     assert runtime.update._store.is_failed("9.9.9.9") is False
+
+
+# -- import-backup-archive 5.2: a completed restore restarts cobble -------
+def test_a_completed_restore_reports_and_requests_a_restart(
+    client: TestClient, monkeypatch
+) -> None:
+    runtime = client.app.state.runtime
+    requested: list[str] = []
+    monkeypatch.setattr(runtime, "request_restart", lambda reason, **kw: requested.append(reason))
+    world = runtime.layout.data_dir / "worlds" / "Bedrock level"
+    world.mkdir(parents=True, exist_ok=True)
+    (world / "marker").write_bytes(b"v1")
+    captured = client.post("/api/backups").json()
+    assert captured["ok"] is True, captured
+
+    body = client.post(f"/api/backups/{captured['archive']}/restore", json={}).json()
+    assert body["ok"] is True, body
+    assert body["restarting"] is True
+    assert len(requested) == 1
+
+
+def test_a_failed_restore_requests_no_restart(client: TestClient, monkeypatch) -> None:
+    runtime = client.app.state.runtime
+    requested: list[str] = []
+    monkeypatch.setattr(runtime, "request_restart", lambda reason, **kw: requested.append(reason))
+    body = client.post("/api/backups/does-not-exist.tar.gz/restore", json={}).json()
+    assert body["ok"] is False and body["restarting"] is False
+    assert requested == []

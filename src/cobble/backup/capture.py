@@ -18,6 +18,7 @@ from typing import BinaryIO
 
 from cobble.acquisition.layout import Layout
 from cobble.backup.artifact import (
+    CAPTURE_EXCLUDED_STATE,
     CONTENT_DATA,
     CONTENT_STATE,
     CONTENTS,
@@ -53,8 +54,16 @@ class _HashingWriter:
         self._raw.flush()
 
 
-def _portable(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo:
-    """Strip ownership so a backup restores without matching uids/gids."""
+_EXCLUDED_PREFIXES = tuple(f"{CONTENT_STATE}/{name}" for name in CAPTURE_EXCLUDED_STATE)
+
+
+def _portable(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo | None:
+    """Strip ownership so a backup restores without matching uids/gids, and
+    leave out transient state a backup must not carry (a held import upload, a
+    staged restore)."""
+    name = tarinfo.name
+    if any(name == p or name.startswith(p + "/") for p in _EXCLUDED_PREFIXES):
+        return None
     tarinfo.uid = tarinfo.gid = 0
     tarinfo.uname = tarinfo.gname = ""
     return tarinfo
