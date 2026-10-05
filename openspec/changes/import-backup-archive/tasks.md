@@ -48,10 +48,10 @@
 
 - [x] 8.1 Commit the implementation on `main` with a conventional-commit message and push to `origin/main`; verify `git status` is clean and `git log origin/main -1` shows the commit
 - [x] 8.2 Bump the version to 0.7.3 in `pyproject.toml`, `src/cobble/__init__.py`, and `tests/deploy/test_release_notes.py`, add a `0.7.3` CHANGELOG section (backup `.tar.gz` import as a full restore, world-folder `.tar.gz` import, cobble restarts after a restore so it runs on restored state); commit as `chore: bump version to 0.7.3` and push; verify `pytest tests/deploy` passes
-- [ ] 8.3 Tag `v0.7.3` and push the tag; verify the release workflow succeeds and `gh release view v0.7.3` lists the wheel
+- [x] 8.3 Tag `v0.7.3` and push the tag; verify the release workflow succeeds and `gh release view v0.7.3` lists the wheel
 
 ## 9. Live verification and screenshots
 
-- [ ] 9.1 Upgrade the test host (cobble-2, 10.0.1.165) to 0.7.3 (install the wheel by path); verify the header badge reads 0.7.3
-- [ ] 9.2 On the test host: download a backup, change a setting and the world, import the downloaded `.tar.gz`, and confirm cobble restarts, the world/settings/player history match the backup, backup history is the host's own, and the server's run state is as before; also import a world-folder `.tar.gz` and a backup with two worlds (refused); record the results in the change
-- [ ] 9.3 Retake all seven `docs/screenshots/` (cobble, configuration, console, dashboard, gamerules, network, updates) on the test host at 1440x900 in dark mode showing 0.7.3; commit as `docs: retake panel screenshots on v0.7.3` and push to `main`; verify the badge reads 0.7.3 in each image
+- [x] 9.1 Upgrade the test host (cobble-2, 10.0.1.165) to 0.7.3 (install the wheel by path); verify the header badge reads 0.7.3
+- [x] 9.2 On the test host: download a backup, change a setting and the world, import the downloaded `.tar.gz`, and confirm cobble restarts, the world/settings/player history match the backup, backup history is the host's own, and the server's run state is as before; also import a world-folder `.tar.gz` and a backup with two worlds (refused); record the results in the change
+- [x] 9.3 Retake all seven `docs/screenshots/` (cobble, configuration, console, dashboard, gamerules, network, updates) on the test host at 1440x900 in dark mode showing 0.7.3; commit as `docs: retake panel screenshots on v0.7.3` and push to `main`; verify the badge reads 0.7.3 in each image
