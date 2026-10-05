@@ -46,8 +46,8 @@
 
 ## 8. Release v0.7.3
 
-- [ ] 8.1 Commit the implementation on `main` with a conventional-commit message and push to `origin/main`; verify `git status` is clean and `git log origin/main -1` shows the commit
-- [ ] 8.2 Bump the version to 0.7.3 in `pyproject.toml`, `src/cobble/__init__.py`, and `tests/deploy/test_release_notes.py`, add a `0.7.3` CHANGELOG section (backup `.tar.gz` import as a full restore, world-folder `.tar.gz` import, cobble restarts after a restore so it runs on restored state); commit as `chore: bump version to 0.7.3` and push; verify `pytest tests/deploy` passes
+- [x] 8.1 Commit the implementation on `main` with a conventional-commit message and push to `origin/main`; verify `git status` is clean and `git log origin/main -1` shows the commit
+- [x] 8.2 Bump the version to 0.7.3 in `pyproject.toml`, `src/cobble/__init__.py`, and `tests/deploy/test_release_notes.py`, add a `0.7.3` CHANGELOG section (backup `.tar.gz` import as a full restore, world-folder `.tar.gz` import, cobble restarts after a restore so it runs on restored state); commit as `chore: bump version to 0.7.3` and push; verify `pytest tests/deploy` passes
 - [ ] 8.3 Tag `v0.7.3` and push the tag; verify the release workflow succeeds and `gh release view v0.7.3` lists the wheel
 
 ## 9. Live verification and screenshots

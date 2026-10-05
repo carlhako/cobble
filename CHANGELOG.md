@@ -5,6 +5,29 @@ workflow publishes that section as the GitHub release notes, which cobble shows
 on its own page before you upgrade. A tag without a section here is not
 published, so add the entry with the version bump.
 
+## 0.7.3 - 2026-10-05
+
+### What's new
+
+- **Move a server to another cobble by importing a backup.** Import World now
+  accepts a `.tar.gz` backup downloaded from cobble's Backups list. It restores
+  everything the backup holds: the world, server configuration, allowlist and
+  permissions, and cobble's own settings and player history. The new cobble
+  keeps its own list of backups. A backup holding more than one world is
+  refused.
+- **Import a world folder as `.tar.gz`.** A world folder packed as a `.tar.gz`
+  imports exactly like a zipped one. The archive type is read from the file
+  itself, not its name.
+
+### Fixes
+
+- **Cobble runs on the restored state after a restore.** Previously, after a
+  restore cobble kept running on the state it had loaded before, so player
+  activity recorded afterwards could be lost. Now cobble restarts itself once a
+  restore is done (the page shows this and reloads when cobble is back), and
+  the server returns to running or stopped as it was before.
+- **Backups no longer include an archive waiting to be imported.**
+
 ## 0.7.2 - 2026-09-25
 
 ### Fixes
