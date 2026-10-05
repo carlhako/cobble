@@ -43,6 +43,7 @@ from cobble.gamerules.manager import GameruleManager
 from cobble.gamerules.service import GameruleService
 from cobble.gamerules.storage import GameruleStorageError
 from cobble.gamerules.storage import open_store as open_gamerule_store
+from cobble.identity.service import IdentityService
 from cobble.logging import get_logger
 from cobble.maintenance.service import MaintenanceSettingsService
 from cobble.maintenance.settings_store import MaintenanceSettingsStore
@@ -181,6 +182,11 @@ class Runtime:
             save_allow_list=lambda on: self.config.write({"allow-list": "true" if on else "false"}),
         )
         self.bus.subscribe(self.access.on_event)
+
+        # Server identity key (server-identity spec): saves the running identity
+        # once at readiness so NetherNet trust survives restarts.
+        self.identity = IdentityService(self.console, self.supervisor, self.layout.data_dir)
+        self.bus.subscribe(self.identity.on_event)
 
         self.status = StatusTracker(
             self.supervisor,
@@ -347,6 +353,7 @@ class Runtime:
         await self.scheduler.stop()
         await self.supervisor.aclose()
         await self.access.aclose()
+        await self.identity.aclose()
         if self.ban_store is not None:
             self.ban_store.close()
         if self.gamerules is not None:

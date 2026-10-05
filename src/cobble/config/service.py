@@ -342,15 +342,17 @@ class ConfigService:
             pending_restart=running and saved != value,
         )
 
-    def network(self) -> dict:
+    def network(self, identity: dict | None = None) -> dict:
         """The network view (server-network spec): the settings and ports to
-        forward for each transport, and which one the next start uses."""
+        forward for each transport, and which one the next start uses.
+        ``identity`` is the server identity state, supplied by the caller."""
         settings = self.read()
         return network_view(
             values={s.key: s.value for s in settings},
             present={s.key for s in settings if s.present},
             transport=self.transport_view().to_dict(),
             conflicts=self.conflicts(),
+            identity=identity,
         )
 
     # -- writes -------------------------------------------------

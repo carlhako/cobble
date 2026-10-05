@@ -122,16 +122,22 @@ def network_view(
     present: set[str],
     transport: dict,
     conflicts: list[ValidationIssue],
+    identity: dict | None = None,
 ) -> dict:
     """Build the view.
 
     ``values`` holds every recognised setting's value (the default when not
     set) with accumulating keys combined; ``present`` names the keys the file
-    assigns; ``transport`` is the transport view's dict.
+    assigns; ``transport`` is the transport view's dict; ``identity`` is the
+    server identity state (``{saved, running}``), passed through untouched so
+    this module stays free of the supervisor and the key file.
     """
-    return {
+    view = {
         "transport": transport,
         "layout": resolve_transport(transport.get("saved"), transport.get("recommended")),
         "layouts": {name: _layout(name, values, present) for name in _LAYOUTS},
         "conflicts": [c.to_dict() for c in conflicts],
     }
+    if identity is not None:
+        view["identity"] = identity
+    return view

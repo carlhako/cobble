@@ -10,6 +10,7 @@
             allowlist.json          real
             permissions.json        real
             worlds/                 real (LevelDB; stable path across versions)
+            keys/                   real (BDS's saved server identity key)
             bedrock_server -> ../current/bedrock_server   symlinked vendor payload
             definitions    -> ../current/definitions      ...
     <state_dir>/                    cobble's durable state, captured as a unit
@@ -44,8 +45,10 @@ log = get_logger("acquisition.layout")
 #                  libMinecraft.Server.Lib.a packet-statistics.txt
 #                  packetlimitconfig.json profanity_filter.wlist release-notes.txt
 #   mutable      : worlds/ server.properties allowlist.json permissions.json
+# ``keys/`` is not in that tree; it is reserved so a version that ships one is
+# never symlinked over the operator's saved server identity key.
 MUTABLE_ENTRIES: frozenset[str] = frozenset(
-    {"worlds", "server.properties", "allowlist.json", "permissions.json"}
+    {"worlds", "keys", "server.properties", "allowlist.json", "permissions.json"}
 )
 
 

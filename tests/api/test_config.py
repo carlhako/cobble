@@ -175,7 +175,7 @@ def test_network_route_shape(client: TestClient) -> None:
         json={"changes": {"transport": "nethernet", "server-udp-ports": "19140-19159"}},
     )
     body = client.get("/api/config/network").json()
-    assert set(body) == {"transport", "layout", "layouts", "conflicts"}
+    assert set(body) == {"transport", "layout", "layouts", "conflicts", "identity"}
     assert body["layout"] == "nethernet"
     assert set(body["layouts"]) == {"nethernet", "raknet"}
     nethernet = body["layouts"]["nethernet"]
@@ -183,3 +183,120 @@ def test_network_route_shape(client: TestClient) -> None:
     assert nethernet["udp_range"]["form"] == "range"
     assert {"protocol": "udp", "ports": "19140-19159"} in nethernet["forward"]
     assert body["transport"]["saved"] == "nethernet"
+
+
+# -- server-identity (tasks 3.1, 3.2) -------------------------------------------
+def _key(client: TestClient):
+    key = client.app.state.runtime.layout.data_dir / "keys" / "server_identity_key.pem"
+    return key
+
+
+def test_network_view_carries_identity_when_stopped_without_a_key(client: TestClient) -> None:
+    assert client.get("/api/config/network").json()["identity"] == {
+        "saved": False,
+        "running": False,
+    }
+
+
+def test_network_view_carries_identity_for_a_running_server(client: TestClient) -> None:
+    from cobble.supervisor.state import RunState
+
+    runtime = client.app.state.runtime
+    sup = runtime.supervisor
+    orig = type(sup).state
+    type(sup).state = property(lambda self: RunState.RUNNING)
+    try:
+        assert client.get("/api/config/network").json()["identity"] == {
+            "saved": False,
+            "running": True,
+        }
+        key = _key(client)
+        key.parent.mkdir(exist_ok=True)
+        key.write_text("PEM")
+        assert client.get("/api/config/network").json()["identity"] == {
+            "saved": True,
+            "running": True,
+        }
+    finally:
+        type(sup).state = orig
+
+
+class _FakeIdentity:
+    def __init__(self, outcome) -> None:
+        self.outcome = outcome
+        self.calls = 0
+
+    def state(self):
+        from cobble.identity.service import IdentityState
+
+        return IdentityState(saved=False, running=True)
+
+    async def aclose(self) -> None:
+        pass
+
+    async def save_running(self):
+        self.calls += 1
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
+
+
+def test_identity_save_route_succeeds(client: TestClient) -> None:
+    from cobble.identity.service import IdentityState
+
+    client.app.state.runtime.identity = _FakeIdentity(IdentityState(saved=True, running=True))
+    resp = client.post("/api/config/network/identity/save")
+    assert resp.status_code == 200
+    assert resp.json() == {"identity": {"saved": True, "running": True}}
+
+
+def test_identity_save_route_maps_errors(client: TestClient) -> None:
+    from cobble.identity.service import IdentitySaveError
+    from cobble.supervisor.supervisor import MaintenanceInProgressError, NotRunningError
+
+    runtime = client.app.state.runtime
+    runtime.identity = _FakeIdentity(NotRunningError("the server is not running"))
+    resp = client.post("/api/config/network/identity/save")
+    assert resp.status_code == 409 and resp.json()["detail"]["error"] == "not_running"
+
+    runtime.identity = _FakeIdentity(
+        MaintenanceInProgressError("a backup operation is in progress")
+    )
+    resp = client.post("/api/config/network/identity/save")
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["error"] == "maintenance_in_progress"
+
+    runtime.identity = _FakeIdentity(IdentitySaveError("Failed to save server identity key to x"))
+    resp = client.post("/api/config/network/identity/save")
+    assert resp.status_code == 502
+    assert "Failed to save" in resp.json()["detail"]["detail"]
+
+
+def test_identity_save_route_refuses_while_stopped_and_writes_nothing(client: TestClient) -> None:
+    resp = client.post("/api/config/network/identity/save")
+    assert resp.status_code == 409
+    assert not _key(client).exists()
+
+
+def test_identity_save_route_with_a_key_present_sends_no_command(client: TestClient) -> None:
+    from cobble.supervisor.state import RunState
+
+    runtime = client.app.state.runtime
+    key = _key(client)
+    key.parent.mkdir(exist_ok=True)
+    key.write_text("operator key")
+
+    async def boom(*a, **kw):
+        raise AssertionError("no console command expected")
+
+    runtime.console.query = boom
+    sup = runtime.supervisor
+    orig = type(sup).state
+    type(sup).state = property(lambda self: RunState.RUNNING)
+    try:
+        resp = client.post("/api/config/network/identity/save")
+    finally:
+        type(sup).state = orig
+    assert resp.status_code == 200
+    assert resp.json()["identity"]["saved"] is True
+    assert key.read_text() == "operator key"

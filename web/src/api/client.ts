@@ -337,6 +337,13 @@ export interface NetworkView {
   layout: NetworkTransport;
   layouts: Record<NetworkTransport, NetworkLayout>;
   conflicts: ValidationIssue[];
+  /** Whether a server identity key is saved, and whether the server runs. */
+  identity: IdentityState;
+}
+
+export interface IdentityState {
+  saved: boolean;
+  running: boolean;
 }
 
 export type SessionEndReason =
@@ -601,6 +608,8 @@ export const api = {
   configWorlds: () => request<WorldsView>("GET", "/config/worlds"),
   configTransport: () => request<TransportView>("GET", "/config/transport"),
   getNetwork: () => request<NetworkView>("GET", "/config/network"),
+  saveIdentity: () =>
+    request<{ identity: IdentityState }>("POST", "/config/network/identity/save"),
 
   gamerulesRead: () => request<GameruleView>("GET", "/gamerules"),
   gamerulesWrite: (name: string, value: GameruleValue) =>

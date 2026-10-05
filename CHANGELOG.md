@@ -5,6 +5,17 @@ workflow publishes that section as the GitHub release notes, which cobble shows
 on its own page before you upgrade. A tag without a section here is not
 published, so add the entry with the version bump.
 
+## Unreleased
+
+### What's new
+
+- **Players no longer have to re-accept the server after every restart.** Under
+  NetherNet, Bedrock makes a new server identity on each start unless a key is
+  saved. cobble now saves the running identity once, the first time the server
+  is ready, and never replaces an existing key. The Network section shows
+  whether it is saved and can retry the save. Backups now contain this private
+  key, so treat downloaded backups as sensitive.
+
 ## 0.7.3 - 2026-10-05
 
 ### What's new

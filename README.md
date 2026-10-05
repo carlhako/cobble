@@ -150,6 +150,7 @@ With no internet access, set `COBBLE_RELEASE_CHECK_ENABLED=false` in
         allowlist.json      real file
         permissions.json    real file
         worlds/             real directory (LevelDB world; stable path across versions)
+        keys/               real directory (the saved server identity key, once saved)
         bedrock_server -> ../current/bedrock_server   vendor payload, symlinked in
         definitions -> ../current/definitions         …and every other payload entry
 /var/lib/cobble/          cobble's own durable state (backed up as a unit)
@@ -266,6 +267,21 @@ A `server-udp-ports` value the from–to form can't show (a NAT mapping with an
 address, or several entries) is shown read-only and left alone when the section
 saves. Edit it in Configuration, which checks it against the grammar in the
 vendor `bedrock_server_how_to.html`.
+
+**Server identity.** Under NetherNet the server proves who it is to players
+with a key, `data/keys/server_identity_key.pem`. Without a saved key Bedrock
+makes a new one in memory on every start, and players have to accept the server
+again after each restart, update or restore. When the server becomes ready and
+no key exists, cobble saves the running identity once (`serveridentity save`),
+so players who already trust the server keep working and later restarts reuse
+the key. cobble never replaces an existing key, including one you put there
+yourself. The Network section shows whether the identity is saved. If the
+automatic save failed, it offers **Save current identity** while the server is
+running. While the server is stopped it says the identity will be saved at the
+next start. The key is part of `data/`, so Bedrock updates leave it alone and
+backups carry it. Restoring a backup taken before the key existed removes it,
+and the next start saves a new identity, so players accept the server once more.
+Importing a backup from another cobble brings that server's identity with it.
 
 The **Dashboard** shows the transport the server is using. When that isn't the
 default for the running Bedrock version, a note says so and offers a one-click

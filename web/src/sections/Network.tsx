@@ -4,6 +4,7 @@ import { useStatus } from "../api/StatusContext";
 import {
   ApiCallError,
   api,
+  type IdentityState,
   type NetworkLayout,
   type NetworkTransport,
   type NetworkView,
@@ -229,6 +230,61 @@ function ForwardPanel({ layout, stale }: { layout: NetworkLayout; stale: boolean
   );
 }
 
+function IdentityRow({
+  identity,
+  readOnly,
+  onSaved,
+}: {
+  identity: IdentityState;
+  readOnly: boolean;
+  onSaved: (next: IdentityState) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const saveNow = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.saveIdentity();
+      onSaved(r.identity);
+    } catch (e) {
+      setError(e instanceof ApiCallError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="cfg-row" role="group" aria-label="server identity">
+      <span className="cfg-label">Server identity</span>
+      <div className="cfg-control">
+        {identity.saved ? (
+          <span>Saved</span>
+        ) : identity.running ? (
+          <>
+            <span>Not saved: changes on every restart</span>
+            {!readOnly && (
+              <button className="btn" disabled={busy} onClick={() => void saveNow()}>
+                {busy ? "Saving…" : "Save current identity"}
+              </button>
+            )}
+          </>
+        ) : (
+          <span>Will be saved at the next start</span>
+        )}
+      </div>
+      <div className="cfg-meta">
+        <span className="muted">
+          The key players' devices use to recognise this server. An identity that isn't
+          saved changes on every restart, so players may have to accept the server again.
+        </span>
+        {error && <span className="cfg-error">{error}</span>}
+      </div>
+    </div>
+  );
+}
+
 export function Network() {
   const { status, stale } = useStatus();
   const maintenance = status?.maintenance ?? null;
@@ -434,6 +490,14 @@ export function Network() {
                     </div>
                   </div>
                 ),
+              )}
+
+              {draft.transport === "nethernet" && (
+                <IdentityRow
+                  identity={view.identity}
+                  readOnly={maintenance !== null}
+                  onSaved={(identity) => setView((v) => (v ? { ...v, identity } : v))}
+                />
               )}
 
               {layout.lan_discovery && (

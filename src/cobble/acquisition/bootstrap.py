@@ -25,8 +25,9 @@ from cobble.settings import Settings
 log = get_logger("acquisition.bootstrap")
 
 # Mutable entries seeded into data/ from the vendor tree on a fresh install.
-# worlds/ is left to BDS to create on first launch.
-_SEED_FILES = tuple(sorted(MUTABLE_ENTRIES - {"worlds"}))
+# worlds/ is left to BDS to create on first launch; keys/ is written by BDS when
+# a server identity key is saved.
+_SEED_FILES = tuple(sorted(MUTABLE_ENTRIES - {"worlds", "keys"}))
 
 
 @dataclass(frozen=True)

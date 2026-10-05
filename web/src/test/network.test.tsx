@@ -1,7 +1,12 @@
 import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NetworkLayout, NetworkView, ValidationIssue } from "../api/client";
+import type {
+  IdentityState,
+  NetworkLayout,
+  NetworkView,
+  ValidationIssue,
+} from "../api/client";
 import { Configuration } from "../sections/Configuration";
 import { Network } from "../sections/Network";
 import { sections } from "../sections";
@@ -105,12 +110,14 @@ function view(
   layout: "nethernet" | "raknet",
   nn: NetworkLayout,
   conflicts: ValidationIssue[] = [],
+  identity: IdentityState = { saved: true, running: false },
 ): NetworkView {
   return {
     transport: { ...TRANSPORT, saved: layout },
     layout,
     layouts: { nethernet: nn, raknet: RAKNET },
     conflicts,
+    identity,
   };
 }
 
@@ -142,6 +149,8 @@ interface State {
   conflicts: ValidationIssue[];
   /** Applied on POST /api/config; returns the write response. */
   onWrite: (changes: Record<string, string>) => Record<string, unknown>;
+  /** Answers POST /api/config/network/identity/save. */
+  onSaveIdentity?: () => { status: number; body: unknown };
 }
 
 const ACCEPTED = {
@@ -158,7 +167,13 @@ function mockApi(state: State) {
     const method = init?.method ?? "GET";
     let body: unknown = {};
     if (url === "/api/config/network") body = state.network;
-    else if (url === "/api/config/worlds")
+    else if (url === "/api/config/network/identity/save" && method === "POST") {
+      const r = state.onSaveIdentity!();
+      return new Response(JSON.stringify(r.body), {
+        status: r.status,
+        headers: { "content-type": "application/json" },
+      });
+    } else if (url === "/api/config/worlds")
       body = { worlds: [], current: "Bedrock level", current_present: false };
     else if (url === "/api/config" && method === "GET")
       body = { settings: [], pending: state.pending, conflicts: state.conflicts };
@@ -175,7 +190,10 @@ function mockApi(state: State) {
 
 function posted(fn: ReturnType<typeof vi.fn>): Record<string, string>[] {
   return fn.mock.calls
-    .filter(([, init]) => (init as RequestInit | undefined)?.method === "POST")
+    .filter(
+      ([url, init]) =>
+        url === "/api/config" && (init as RequestInit | undefined)?.method === "POST",
+    )
     .map(([, init]) => JSON.parse((init as RequestInit).body as string).changes);
 }
 
@@ -420,5 +438,68 @@ describe("Network section", () => {
     expect(
       await screen.findByRole("alert", { name: "configuration conflicts" }),
     ).toHaveTextContent(/allows 5 UDP ports/);
+  });
+
+  describe("server identity", () => {
+    const RUNNING = { ...BASE, run_state: "running" };
+    const notSaved = (running: boolean) =>
+      view("nethernet", RANGE, [], { saved: false, running });
+    const saveButton = () =>
+      screen.queryByRole("button", { name: "Save current identity" });
+
+    it("saved: shown as saved with no button", async () => {
+      await open(state(view("nethernet", RANGE, [], { saved: true, running: true })), RUNNING);
+      const row = screen.getByRole("group", { name: "server identity" });
+      expect(within(row).getByText("Saved")).toBeInTheDocument();
+      expect(saveButton()).not.toBeInTheDocument();
+    });
+
+    it("not saved and running: the button saves it without a config write", async () => {
+      const s = state(notSaved(true));
+      s.onSaveIdentity = () => ({
+        status: 200,
+        body: { identity: { saved: true, running: true } },
+      });
+      const fn = await open(s, RUNNING);
+      const row = screen.getByRole("group", { name: "server identity" });
+      expect(within(row).getByText("Not saved: changes on every restart")).toBeInTheDocument();
+      await userEvent.click(saveButton()!);
+      await waitFor(() => expect(within(row).getByText("Saved")).toBeInTheDocument());
+      expect(saveButton()).not.toBeInTheDocument();
+      expect(posted(fn)).toEqual([]);
+    });
+
+    it("not saved and stopped: says it is saved at the next start, no button", async () => {
+      await open(state(notSaved(false)));
+      expect(screen.getByText("Will be saved at the next start")).toBeInTheDocument();
+      expect(saveButton()).not.toBeInTheDocument();
+    });
+
+    it("in maintenance: no button", async () => {
+      await open(state(notSaved(true)), {
+        ...RUNNING,
+        maintenance: { operation: "backing_up", step: null },
+      });
+      expect(saveButton()).not.toBeInTheDocument();
+    });
+
+    it("a failure shows the reason and stays not saved", async () => {
+      const s = state(notSaved(true));
+      s.onSaveIdentity = () => ({
+        status: 502,
+        body: {
+          detail: { error: "identity_save_failed", detail: "Failed to save server identity key" },
+        },
+      });
+      await open(s, RUNNING);
+      await userEvent.click(saveButton()!);
+      expect(await screen.findByText(/Failed to save server identity key/)).toBeInTheDocument();
+      expect(saveButton()).toBeInTheDocument();
+    });
+
+    it("the RakNet layout has no identity row", async () => {
+      await open(state(view("raknet", RANGE, [], { saved: false, running: true })), RUNNING);
+      expect(screen.queryByRole("group", { name: "server identity" })).not.toBeInTheDocument();
+    });
   });
 });

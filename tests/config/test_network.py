@@ -117,3 +117,10 @@ def test_an_absent_transport_resolves_to_the_version_default(net: Net) -> None:
 def test_the_view_carries_the_capacity_conflict(net: Net) -> None:
     view = net.view("transport=nethernet\nmax-players=10\nserver-udp-ports=19140-19144\n")
     assert [c["key"] for c in view["conflicts"]] == ["server-udp-ports"]
+
+
+def test_identity_is_passed_through_to_the_view(net: Net) -> None:
+    (net.layout.data_dir / "server.properties").write_text("server-port=19132\n")
+    assert "identity" not in net.svc.network()
+    ident = {"saved": True, "running": False}
+    assert net.svc.network(identity=ident)["identity"] == ident

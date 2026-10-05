@@ -9,11 +9,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from cobble.api._shared import auth_guard, conflict
-from cobble.supervisor.supervisor import MaintenanceInProgressError, SupervisorError
+from cobble.identity.service import IdentitySaveError
+from cobble.supervisor.supervisor import (
+    MaintenanceInProgressError,
+    NotRunningError,
+    SupervisorError,
+)
 
 if TYPE_CHECKING:
     from cobble.runtime import Runtime
@@ -51,7 +56,24 @@ def build_config_router(runtime: Runtime) -> APIRouter:
 
     @router.get("/network", summary="Network settings and ports to forward, per transport")
     async def network() -> dict:
-        return runtime.config.network()
+        return runtime.config.network(identity=runtime.identity.state().to_dict())
+
+    @router.post(
+        "/network/identity/save",
+        summary="Save the running server identity key (never replaces an existing one)",
+    )
+    async def save_identity() -> dict:
+        try:
+            state = await runtime.identity.save_running()
+        except MaintenanceInProgressError as exc:
+            raise conflict(exc.code, str(exc)) from exc
+        except NotRunningError as exc:
+            raise conflict(getattr(exc, "code", "not_running"), str(exc)) from exc
+        except IdentitySaveError as exc:
+            raise HTTPException(
+                status_code=502, detail={"error": exc.code, "detail": exc.reason}
+            ) from exc
+        return {"identity": state.to_dict()}
 
     @router.get("/worlds", summary="List the worlds backing level-name")
     async def worlds() -> dict:

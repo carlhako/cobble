@@ -329,3 +329,40 @@ def test_install_defaults_allowlist_off_for_lan(tmp_settings: Settings, fake_ven
     assert "online-mode=true" in props  # other settings untouched
     # server.properties in data/ is a real file, not a symlink into the payload.
     assert not (layout.data_dir / "server.properties").is_symlink()
+
+
+def test_keys_dir_is_never_symlinked_from_a_vendor_tree(
+    tmp_settings: Settings, fake_vendor
+) -> None:
+    # server-identity: a version that ships keys/ must not shadow the saved key.
+    layout = _install_two(tmp_settings, fake_vendor)
+    (layout.version_dir("1.0.0.1") / "keys").mkdir()
+    (layout.version_dir("1.0.0.1") / "keys" / "vendor.pem").write_text("vendor")
+    layout.set_active_version("1.0.0.1")
+    layout.ensure_payload_symlinks()
+    assert not (layout.data_dir / "keys").is_symlink()
+    assert "keys" not in layout.payload_entry_names()
+
+
+def test_saved_identity_key_survives_version_swap_byte_for_byte(
+    tmp_settings: Settings, fake_vendor
+) -> None:
+    layout = _install_two(tmp_settings, fake_vendor)
+    layout.set_active_version("1.0.0.1")
+    layout.ensure_payload_symlinks()
+    key = layout.data_dir / "keys" / "server_identity_key.pem"
+    key.parent.mkdir()
+    key.write_bytes(b"-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n")
+    before = key.read_bytes()
+
+    layout.set_active_version("2.0.0.1")
+    layout.ensure_payload_symlinks()
+
+    assert not key.parent.is_symlink()
+    assert key.read_bytes() == before
+
+
+def test_fresh_bootstrap_does_not_create_keys_dir(tmp_settings: Settings, fake_vendor) -> None:
+    s = _vendor_settings(tmp_settings, fake_vendor)
+    bootstrap_if_needed(s)
+    assert not (Layout.from_settings(s).data_dir / "keys").exists()
