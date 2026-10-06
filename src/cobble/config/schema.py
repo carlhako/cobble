@@ -194,7 +194,9 @@ _ENTRIES: tuple[PropertySchema, ...] = (
         "server-udp-ports",
         "",
         "UDP ports for player connections under NetherNet. Empty lets the OS pick. "
-        "Pin a range to forward it for external players.",
+        "Pin a range to forward it for external players. A mapping "
+        "[address:]external:internal sets the ports players use apart from the local "
+        "ones; the address may be an IP address or a hostname.",
         check=_check_udp_ports,
     ),
     _b(

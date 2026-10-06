@@ -52,9 +52,16 @@ def test_nethernet_with_a_pinned_range(net: Net) -> None:
         "value": "",
         "present": False,
         "protocol": None,
-        "label": "Bind address",
+        "label": "Bind address (this machine)",
     }
-    assert layout["udp_range"] == {"form": "range", "start": 19140, "end": 19159, "size": 20}
+    assert layout["udp_range"] == {
+        "form": "range",
+        "start": 19140,
+        "end": 19159,
+        "size": 20,
+        "external": None,
+        "address": None,
+    }
     assert layout["lan_discovery"] == {"protocol": "udp", "port": 7551}
     assert layout["forward"] == [
         {"protocol": "tcp", "ports": "19132"},
@@ -71,21 +78,52 @@ def test_nethernet_with_the_os_picking_ports_requires_a_pin(net: Net) -> None:
     assert layout["forward"] == [{"protocol": "tcp", "ports": "19132"}]
 
 
-def test_nethernet_custom_mapping_forwards_the_external_ports(net: Net) -> None:
+def test_nethernet_mapping_forwards_the_external_ports_and_translation(net: Net) -> None:
     value = "203.0.113.10:19132-19232:32000-32100"
     layout = net.view(f"transport=nethernet\nserver-udp-ports={value}\n")["layouts"]["nethernet"]
     assert layout["udp_range"] == {
-        "form": "custom",
-        "value": value,
-        "local": [{"start": 32000, "end": 32100}],
+        "form": "range",
+        "start": 32000,
+        "end": 32100,
         "size": 101,
+        "external": {"start": 19132, "end": 19232},
+        "address": "203.0.113.10",
     }
     # server-port absent: its default applies.
     assert layout["forward"] == [
         {"protocol": "tcp", "ports": "19132"},
-        {"protocol": "udp", "ports": "19132-19232"},
+        {"protocol": "udp", "ports": "19132-19232", "to": "32000-32100"},
     ]
     assert layout["pin_required"] is False
+
+
+def test_nethernet_hostname_mapping_with_equal_sides_has_no_translation(net: Net) -> None:
+    value = "play.example.com:19140-19150:19140-19150"
+    layout = net.view(f"transport=nethernet\nserver-udp-ports={value}\n")["layouts"]["nethernet"]
+    assert layout["udp_range"]["address"] == "play.example.com"
+    assert layout["udp_range"]["external"] == {"start": 19140, "end": 19150}
+    assert layout["forward"][1:] == [{"protocol": "udp", "ports": "19140-19150"}]
+
+
+def test_nethernet_mapping_without_an_address(net: Net) -> None:
+    layout = net.view("transport=nethernet\nserver-udp-ports=19132-19142:19140-19150\n")["layouts"][
+        "nethernet"
+    ]
+    assert layout["udp_range"]["address"] is None
+    assert layout["forward"][1:] == [
+        {"protocol": "udp", "ports": "19132-19142", "to": "19140-19150"}
+    ]
+
+
+def test_nethernet_several_entries_are_custom_with_one_udp_line_each(net: Net) -> None:
+    value = "19132:19140,19133:19141"
+    layout = net.view(f"transport=nethernet\nserver-udp-ports={value}\n")["layouts"]["nethernet"]
+    assert layout["udp_range"]["form"] == "custom"
+    assert layout["udp_range"]["value"] == value
+    assert layout["forward"][1:] == [
+        {"protocol": "udp", "ports": "19132", "to": "19140"},
+        {"protocol": "udp", "ports": "19133", "to": "19141"},
+    ]
 
 
 def test_raknet_lists_udp_ports_with_ipv6_marked(net: Net) -> None:

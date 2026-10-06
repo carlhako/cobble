@@ -8,17 +8,22 @@ NetherNet") documents the value as empty, or comma-separated entries, each one o
 * a port, ``19140``;
 * an inclusive range, ``19140-19159``;
 * a mapping ``[address:]external:internal``, where each side is a port or a range
-  and the address is an IPv4 literal or a bracketed IPv6 literal.
+  and the address is an IPv4 literal, a bracketed IPv6 literal or a hostname.
+
+Hostname addresses are not in the vendor docs: they were verified live on
+1.26.51.1 (BDS resolves the name itself and an outside player joined). Cobble
+checks the name's syntax only (RFC 1123) and never looks it up.
 
 This module parses that grammar once, for both the schema validator and the
 network view, and derives the views they need: the local ports the server is
 confined to, the ports to forward, and whether the value fits the Network
-section's from/to form.
+section's single-entry form.
 """
 
 from __future__ import annotations
 
 import ipaddress
+import re
 from dataclasses import dataclass
 
 __all__ = [
@@ -26,6 +31,7 @@ __all__ = [
     "Form",
     "Range",
     "form",
+    "forward_pairs",
     "forward_ports",
     "local_ports",
     "parse",
@@ -59,12 +65,15 @@ class Entry:
 
 @dataclass(frozen=True)
 class Form:
-    """How the Network section can show a value: ``os`` (empty), ``range`` (one
-    plain entry, editable as from/to), or ``custom`` (anything else, read-only)."""
+    """How the Network section can show a value: ``os`` (empty), ``range`` (exactly
+    one entry, editable; ``start``/``end`` are its local ports), or ``custom``
+    (anything else, read-only)."""
 
     kind: str  # "os" | "range" | "custom"
     start: int | None = None
     end: int | None = None
+    external: Range | None = None
+    address: str | None = None
 
 
 def _port(text: str) -> int:
@@ -87,6 +96,9 @@ def _range(text: str) -> Range:
     return Range(start, end)
 
 
+_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
+
+
 def _address(text: str) -> str:
     if text.startswith("["):
         if not text.endswith("]"):
@@ -96,10 +108,14 @@ def _address(text: str) -> str:
         except ValueError:
             raise ValueError(f"{text!r} is not an IPv6 address") from None
         return text
-    try:
-        ipaddress.IPv4Address(text)
-    except ValueError:
-        raise ValueError(f"{text!r} is not an IPv4 address") from None
+    if text and all(c.isdigit() or c == "." for c in text):
+        try:
+            ipaddress.IPv4Address(text)
+        except ValueError:
+            raise ValueError(f"{text!r} is not an IPv4 address") from None
+        return text
+    if len(text) > 253 or not all(_LABEL.fullmatch(label) for label in text.split(".")):
+        raise ValueError(f"{text!r} is not an IPv4 address or a valid hostname")
     return text
 
 
@@ -177,20 +193,26 @@ def forward_ports(entries: list[Entry]) -> list[Range]:
     return _merge([e.external or e.internal for e in entries])
 
 
+def forward_pairs(entries: list[Entry]) -> list[tuple[Range, Range]]:
+    """``(external, internal)`` per entry, in order and unmerged. A plain entry
+    has the same range on both sides."""
+    return [(e.external or e.internal, e.internal) for e in entries]
+
+
 def port_count(ranges: list[Range]) -> int:
     return sum(r.size for r in ranges)
 
 
 def form(value: str) -> Form:
-    """How the value fits the Network section's range form. An unparseable value
-    is ``custom``: it is shown verbatim and never overwritten by the form."""
+    """How the value fits the Network section's single-entry form. Several entries
+    or an unparseable value are ``custom``: shown verbatim, never overwritten."""
     try:
         entries = parse(value)
     except ValueError:
         return Form("custom")
     if not entries:
         return Form("os")
-    if len(entries) == 1 and entries[0].external is None and entries[0].address is None:
-        r = entries[0].internal
-        return Form("range", r.start, r.end)
+    if len(entries) == 1:
+        e = entries[0]
+        return Form("range", e.internal.start, e.internal.end, e.external, e.address)
     return Form("custom")

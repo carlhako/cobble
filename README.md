@@ -250,23 +250,36 @@ all.
 
 The **Network** section shows the settings for the transport the next start
 will use, labelled with the protocol each one governs. Under NetherNet these are
-the handshake port (TCP), the bind address, and the player UDP ports, which you
-can leave to the OS or pin to a from–to range. Under RakNet they are the IPv4 and
+the handshake port (TCP), the bind address (the address on this machine), and
+the player UDP ports, which you can leave to the OS or pin as one entry: local
+ports (what the server binds), optional external ports (what players use on your
+router, when they differ), and an optional address players reach. Under RakNet they are the IPv4 and
 IPv6 ports (both UDP). You can switch the transport there too.
 
 The section also lists what to forward on your router to this server's LAN
 address for players outside your network: under NetherNet, TCP on the handshake
-port and UDP on the pinned range. The OS's ephemeral range can't sensibly be
+port and UDP on the external ports, with the local ports they translate to when
+those differ (`UDP 19132-19142 -> 19140-19150 on this server`). The OS's ephemeral range can't sensibly be
 forwarded, so until you pin a range the section says to pin one first. If a
 firewall sits between players and the server, allow the same ports plus UDP 7551
 for LAN discovery. Each player uses its own UDP port, so pin at least as many
 ports as `max-players`. If the range is smaller, a banner at the top of the
 Network and Configuration sections says so.
 
-A `server-udp-ports` value the from–to form can't show (a NAT mapping with an
-address, or several entries) is shown read-only and left alone when the section
-saves. Edit it in Configuration, which checks it against the grammar in the
-vendor `bedrock_server_how_to.html`.
+The address players reach is an IP address or a hostname, such as a dynamic-DNS
+name; leave it blank to advertise the machine's own addresses. Cobble checks a
+hostname's syntax only and never looks it up. Hostnames aren't in the vendor
+docs, but a Bedrock server resolves them itself (verified on 1.26.51.1). Bedrock
+probably resolves the name once at start, so if the hostname's IP address changes
+the server may need a restart; the section says so while the address is a
+hostname. Blank external ports mean the same ports as local, and a blank end box
+means a single port. The section saves the shortest value that says the same
+thing: a plain range when there is no address and the ports match, otherwise
+`[address:]external:internal`.
+
+A `server-udp-ports` value with several entries, or one cobble can't parse, is
+shown read-only and left alone when the section saves. Edit it in Configuration,
+which checks it against the grammar in the vendor `bedrock_server_how_to.html`.
 
 **Server identity.** Under NetherNet the server proves who it is to players
 with a key, `data/keys/server_identity_key.pem`. Without a saved key Bedrock

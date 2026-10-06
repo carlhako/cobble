@@ -71,10 +71,10 @@ def test_malformed_values_raise_with_a_reason(value: str, reason: str) -> None:
 
 def test_form_of_a_range_and_a_single_port() -> None:
     r = udp_ports.form("19140-19159")
-    assert r == Form("range", 19140, 19159)
+    assert r == Form("range", 19140, 19159, None, None)
     assert Range(r.start, r.end).size == 20
     single = udp_ports.form("19140")
-    assert single == Form("range", 19140, 19140)
+    assert single == Form("range", 19140, 19140, None, None)
     assert Range(single.start, single.end).size == 1
 
 
@@ -82,9 +82,9 @@ def test_form_of_empty_is_os() -> None:
     assert udp_ports.form("") == Form("os")
 
 
-def test_a_mapping_is_custom_with_its_local_and_forward_ports() -> None:
+def test_a_mapping_is_a_range_form_with_its_local_and_forward_ports() -> None:
     value = "203.0.113.10:19132-19232:32000-32100"
-    assert udp_ports.form(value).kind == "custom"
+    assert udp_ports.form(value).kind == "range"
     entries = udp_ports.parse(value)
     assert udp_ports.local_ports(entries) == [Range(32000, 32100)]
     assert udp_ports.forward_ports(entries) == [Range(19132, 19232)]
@@ -100,6 +100,67 @@ def test_several_entries_are_custom_and_merge_their_local_ports() -> None:
 
 def test_an_unparseable_value_is_custom() -> None:
     assert udp_ports.form("abc").kind == "custom"
+
+
+def test_form_of_a_mapping_carries_external_and_address() -> None:
+    f = udp_ports.form("203.0.113.10:19132-19232:32000-32100")
+    assert f == Form("range", 32000, 32100, Range(19132, 19232), "203.0.113.10")
+    h = udp_ports.form("play.example.com:19140-19150:19140-19150")
+    assert h.address == "play.example.com"
+    assert h.external == Range(19140, 19150)
+    one = udp_ports.form("19132:19140-19150")
+    assert one == Form("range", 19140, 19150, Range(19132, 19132), None)
+
+
+def test_form_of_several_entries_or_garbage_is_custom() -> None:
+    assert udp_ports.form("19140-19149,19160-19169").kind == "custom"
+    assert udp_ports.form("abc").kind == "custom"
+
+
+def test_forward_pairs_keep_external_and_internal_per_entry() -> None:
+    assert udp_ports.forward_pairs(udp_ports.parse("19140-19159")) == [
+        (Range(19140, 19159), Range(19140, 19159))
+    ]
+    assert udp_ports.forward_pairs(udp_ports.parse("19132-19142:19140-19150")) == [
+        (Range(19132, 19142), Range(19140, 19150))
+    ]
+    assert udp_ports.forward_pairs(udp_ports.parse("19132:19140,19133-19134:19141-19142")) == [
+        (Range(19132, 19132), Range(19140, 19140)),
+        (Range(19133, 19134), Range(19141, 19142)),
+    ]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "play.example.com:19140-19150:19140-19150",
+        "localhost:19140:19140",
+        f"{'a' * 63}.example:1:1",
+        "my-host.example.com:1:1",
+    ],
+)
+def test_hostname_addresses_are_accepted(value: str) -> None:
+    assert udp_ports.parse(value)[0].address == value.split(":")[0]
+
+
+@pytest.mark.parametrize(
+    ("value", "reason"),
+    [
+        ("1.2.3.999:1:1", "not an IPv4 address"),
+        ("1.2.3:1:1", "not an IPv4 address"),
+        ("-bad.example:1:1", "valid hostname"),
+        ("bad-.example:1:1", "valid hostname"),
+        ("my_host:1:1", "valid hostname"),
+        ("a..b:1:1", "valid hostname"),
+        ("host.:1:1", "valid hostname"),
+        (f"{'a' * 64}.example:1:1", "valid hostname"),
+        (f"{'a.' * 126}com:1:1", "valid hostname"),
+        ("2001:db8::1:19132:32000", "must be in brackets"),
+    ],
+)
+def test_malformed_hostname_addresses_are_rejected(value: str, reason: str) -> None:
+    with pytest.raises(ValueError, match=reason):
+        udp_ports.parse(value)
 
 
 def test_range_renders_as_the_grammar_writes_it() -> None:

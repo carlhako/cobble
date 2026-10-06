@@ -32,7 +32,7 @@ class _Field:
 _LAYOUTS: dict[str, tuple[_Field, ...]] = {
     "nethernet": (
         _Field("server-port", "tcp", "Handshake port"),
-        _Field("server-ip", None, "Bind address"),
+        _Field("server-ip", None, "Bind address (this machine)"),
         _Field("server-udp-ports", "udp", "Player UDP ports"),
     ),
     "raknet": (
@@ -57,6 +57,12 @@ def _udp_range(value: str) -> dict:
             "start": shape.start,
             "end": shape.end,
             "size": shape.end - shape.start + 1,
+            "external": (
+                {"start": shape.external.start, "end": shape.external.end}
+                if shape.external
+                else None
+            ),
+            "address": shape.address,
         }
     try:
         local = udp_ports.local_ports(udp_ports.parse(value))
@@ -101,10 +107,11 @@ def _layout(transport: str, values: dict[str, str], present: set[str]) -> dict:
     raw = values.get("server-udp-ports", "")
     forward = [{"protocol": "tcp", "ports": port}]
     try:
-        forward += [
-            {"protocol": "udp", "ports": str(r)}
-            for r in udp_ports.forward_ports(udp_ports.parse(raw))
-        ]
+        for external, internal in udp_ports.forward_pairs(udp_ports.parse(raw)):
+            line = {"protocol": "udp", "ports": str(external)}
+            if internal != external:
+                line["to"] = str(internal)
+            forward.append(line)
     except ValueError:
         pass
     udp_range = _udp_range(raw)

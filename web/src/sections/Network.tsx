@@ -36,17 +36,16 @@ interface Draft {
   transport: NetworkTransport;
   values: Record<string, string>;
   udpMode: "os" | "range";
-  from: string;
-  to: string;
+  address: string;
+  localStart: string;
+  localEnd: string;
+  extStart: string;
+  extEnd: string;
 }
 
-/** The saved `server-udp-ports` as the range form would write it, or `null`
- *  for a custom value the form never touches. */
-function savedUdp(view: NetworkView): string | null {
-  const r = view.layouts.nethernet.udp_range;
-  if (!r || r.form === "os") return "";
-  if (r.form === "range") return r.start === r.end ? `${r.start}` : `${r.start}-${r.end}`;
-  return null;
+/** True when the saved `server-udp-ports` is a value the form never touches. */
+function isCustomUdp(view: NetworkView): boolean {
+  return view.layouts.nethernet.udp_range?.form === "custom";
 }
 
 function draftFrom(view: NetworkView): Draft {
@@ -59,14 +58,54 @@ function draftFrom(view: NetworkView): Draft {
     transport: view.layout,
     values,
     udpMode: range ? "range" : "os",
-    from: range ? String(range.start) : "",
-    to: range ? String(range.end) : "",
+    address: range?.address ?? "",
+    localStart: range ? String(range.start) : "",
+    localEnd: range ? String(range.end) : "",
+    extStart: range?.external ? String(range.external.start) : "",
+    extEnd: range?.external ? String(range.external.end) : "",
   };
 }
 
+function span(start: string, end: string): string {
+  return end === "" || end === start ? start : `${start}-${end}`;
+}
+
+/** The shortest `server-udp-ports` value that says what the fields say
+ *  (design.md D4). */
 function composeUdp(d: Draft): string {
   if (d.udpMode === "os") return "";
-  return d.from === d.to || d.to === "" ? d.from : `${d.from}-${d.to}`;
+  const local = span(d.localStart, d.localEnd);
+  const ext = d.extStart === "" ? local : span(d.extStart, d.extEnd);
+  let addr = d.address.trim();
+  if (addr.includes(":") && !addr.includes("[")) addr = `[${addr}]`;
+  if (addr) return `${addr}:${ext}:${local}`;
+  return ext === local ? local : `${ext}:${local}`;
+}
+
+function sideSize(start: string, end: string): number | null {
+  const s = Number(start);
+  const e = Number(end === "" ? start : end);
+  return e >= s ? e - s + 1 : null;
+}
+
+/** Why the pinned ports can't be saved yet, or `null` when they can. */
+function udpProblem(d: Draft): string | null {
+  if (d.udpMode !== "range") return null;
+  if (d.localStart === "") return "Enter the local start port.";
+  const local = sideSize(d.localStart, d.localEnd);
+  if (local === null) return "The local start port is after the end port.";
+  if (d.extStart === "") return null;
+  const ext = sideSize(d.extStart, d.extEnd);
+  if (ext === null) return "The external start port is after the end port.";
+  if (local > 1 && ext > 1 && local !== ext)
+    return `The external range has ${ext} ports but the local range has ${local}. They must be the same size.`;
+  return null;
+}
+
+/** A hostname (not an IP literal) can change address under the server. */
+function isHostname(address: string): boolean {
+  const a = address.trim();
+  return a !== "" && !a.includes(":") && !/^[\d.]+$/.test(a);
 }
 
 /** The changes a save sends: the transport and the settings its layout shows,
@@ -77,9 +116,9 @@ function changesFrom(view: NetworkView, d: Draft): Record<string, string> {
   if (d.transport !== view.layout) out.transport = d.transport;
   for (const s of view.layouts[d.transport].settings) {
     if (s.key === UDP_KEY) {
-      const saved = savedUdp(view);
+      if (isCustomUdp(view)) continue;
       const next = composeUdp(d);
-      if (saved !== null && next !== saved) out[UDP_KEY] = next;
+      if (next !== composeUdp(draftFrom(view))) out[UDP_KEY] = next;
     } else if (d.values[s.key] !== s.value) {
       out[s.key] = d.values[s.key];
     }
@@ -114,8 +153,8 @@ function UdpRangeField({
         </div>
         <div className="cfg-meta">
           <span className="muted">
-            This value uses a form the range editor can't show (a NAT mapping, an address,
-            or several entries). It confines the server to {saved.size} local port
+            This value uses a form the editor can't show (several entries or a value
+            cobble can't parse). It confines the server to {saved.size} local port
             {saved.size === 1 ? "" : "s"}. Saving here leaves it unchanged; edit it in{" "}
             <Link to="/configuration">Configuration</Link>.
           </span>
@@ -125,13 +164,25 @@ function UdpRangeField({
     );
   }
 
-  const from = Number(draft.from);
-  const to = Number(draft.to || draft.from);
+  const problem = udpProblem(draft);
   const size =
-    draft.udpMode === "range" && draft.from !== "" && to >= from ? to - from + 1 : null;
+    draft.udpMode === "range" && problem === null
+      ? sideSize(draft.localStart, draft.localEnd)
+      : null;
+  const port = (label: string, key: keyof Draft) => (
+    <input
+      type="number"
+      aria-label={label}
+      min={1}
+      max={65535}
+      value={draft[key] as string}
+      disabled={disabled}
+      onChange={(e) => onChange({ [key]: e.target.value })}
+    />
+  );
   return (
     <div
-      className={`cfg-row${error ? " has-error" : ""}`}
+      className={`cfg-row${error || problem ? " has-error" : ""}`}
       role="group"
       aria-labelledby="net-udp-label"
     >
@@ -160,41 +211,54 @@ function UdpRangeField({
           Pin a range
         </label>
         {draft.udpMode === "range" && (
-          <span className="net-udp-range">
-            <input
-              type="number"
-              aria-label="From port"
-              min={1}
-              max={65535}
-              value={draft.from}
-              disabled={disabled}
-              onChange={(e) => onChange({ from: e.target.value })}
-            />
-            {" – "}
-            <input
-              type="number"
-              aria-label="To port"
-              min={1}
-              max={65535}
-              value={draft.to}
-              disabled={disabled}
-              onChange={(e) => onChange({ to: e.target.value })}
-            />
-            {size !== null && (
-              <span className="muted">
-                {" "}
-                {size} port{size === 1 ? "" : "s"}
-              </span>
-            )}
-          </span>
+          <>
+            <span className="net-udp-range">
+              <span>Local (this server) </span>
+              {port("Local start port", "localStart")}
+              {" – "}
+              {port("Local end port", "localEnd")}
+              {size !== null && (
+                <span className="muted">
+                  {" "}
+                  {size} port{size === 1 ? "" : "s"}
+                </span>
+              )}
+            </span>
+            <span className="net-udp-range">
+              <span>External (your router) </span>
+              {port("External start port", "extStart")}
+              {" – "}
+              {port("External end port", "extEnd")}
+            </span>
+            <span className="net-udp-range">
+              <span>Address players reach </span>
+              <input
+                type="text"
+                aria-label="Address players reach"
+                placeholder="optional"
+                value={draft.address}
+                disabled={disabled}
+                onChange={(e) => onChange({ address: e.target.value })}
+              />
+            </span>
+          </>
         )}
       </div>
       <div className="cfg-meta">
         <span className="muted">
           Each player connects on its own UDP port. Pin a range with at least as many
           ports as <code>max-players</code> to forward it for players outside your
-          network. <code>{UDP_KEY}</code>
+          network. Leave the external ports blank to use the local ones. The address is an
+          IP address or hostname; leave it blank to advertise this machine's own
+          addresses. <code>{UDP_KEY}</code>
         </span>
+        {draft.udpMode === "range" && isHostname(draft.address) && (
+          <span className="muted" role="note">
+            If this hostname's IP address changes, the server may need a restart to pick
+            up the new address.
+          </span>
+        )}
+        {problem && <span className="cfg-error">{problem}</span>}
         {error && <span className="cfg-error">{error}</span>}
         {warning && !error && <span className="cfg-warn">{warning}</span>}
       </div>
@@ -203,20 +267,27 @@ function UdpRangeField({
 }
 
 function ForwardPanel({ layout, stale }: { layout: NetworkLayout; stale: boolean }) {
+  const range = layout.udp_range?.form === "range" ? layout.udp_range : null;
   return (
     <div className="panel" role="region" aria-label="ports to forward">
       <h2>Forward on your router to this server's LAN address</h2>
       <p className="muted">For players outside your local network.</p>
       <ul className="net-forward">
         {layout.forward.map((f) => (
-          <li key={`${f.protocol} ${f.ports}`}>
+          <li key={`${f.protocol} ${f.ports} ${f.to ?? ""}`}>
             <code>
               {f.protocol.toUpperCase()} {f.ports}
+              {f.to ? ` -> ${f.to} on this server` : ""}
             </code>
             {f.note && <span className="muted"> · {f.note}</span>}
           </li>
         ))}
       </ul>
+      {range?.address && (
+        <p>
+          Players reach you at <code>{range.address}</code>
+        </p>
+      )}
       {layout.pin_required && (
         <p className="cfg-warn">
           Players outside your network can't connect yet. The OS picks the player UDP
@@ -328,6 +399,12 @@ export function Network() {
     [view, draft],
   );
   const dirty = Object.keys(changes).length > 0;
+  const blocked =
+    !!view &&
+    !!draft &&
+    draft.transport === "nethernet" &&
+    !isCustomUdp(view) &&
+    udpProblem(draft) !== null;
 
   const patch = (p: Partial<Draft>) => setDraft((d) => (d ? { ...d, ...p } : d));
   const setValue = (key: string, v: string) =>
@@ -523,7 +600,7 @@ export function Network() {
               <div className="controls-row">
                 <button
                   className="btn btn-start"
-                  disabled={saving || !dirty}
+                  disabled={saving || !dirty || blocked}
                   onClick={() => void save()}
                 >
                   {saving ? "Saving…" : "Save"}

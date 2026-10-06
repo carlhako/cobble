@@ -313,12 +313,21 @@ export interface PortRange {
 
 export type UdpRange =
   | { form: "os" }
-  | { form: "range"; start: number; end: number; size: number }
+  | {
+      form: "range";
+      start: number;
+      end: number;
+      size: number;
+      external: PortRange | null;
+      address: string | null;
+    }
   | { form: "custom"; value: string; local: PortRange[]; size: number };
 
 export interface ForwardEntry {
   protocol: "tcp" | "udp";
   ports: string;
+  /** The local ports a mapped UDP range translates to. */
+  to?: string;
   note?: string;
 }
 

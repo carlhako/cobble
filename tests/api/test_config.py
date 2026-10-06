@@ -168,6 +168,22 @@ def test_a_malformed_udp_range_is_a_per_key_error(client: TestClient) -> None:
     assert udp["present"] is False
 
 
+def test_a_hostname_mapping_flows_through_the_api(client: TestClient) -> None:
+    value = "play.example.com:19140-19150:19140-19150"
+    saved = client.post(
+        "/api/config",
+        json={"changes": {"transport": "nethernet", "server-udp-ports": value}},
+    ).json()
+    assert saved["ok"] is True
+    nethernet = client.get("/api/config/network").json()["layouts"]["nethernet"]
+    assert nethernet["udp_range"]["address"] == "play.example.com"
+    assert {"protocol": "udp", "ports": "19140-19150"} in nethernet["forward"]
+
+    raised = client.post("/api/config", json={"changes": {"max-players": "30"}}).json()
+    assert raised["ok"] is True
+    assert [i["key"] for i in raised["conflicts"]] == ["server-udp-ports"]
+
+
 def test_network_route_shape(client: TestClient) -> None:
     assert "/api/config/network" in client.get("/openapi.json").json()["paths"]
     client.post(
