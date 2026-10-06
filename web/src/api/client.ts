@@ -560,6 +560,19 @@ export interface CobbleVersion {
   upgrade: CobbleUpgrade | null;
 }
 
+/** cobble's own settings (GET/PUT /api/cobble/settings): the timezone every
+ *  schedule runs in (cobble-settings). */
+export interface CobbleSettings {
+  /** The zone the operator set, or null while the host's zone applies. */
+  timezone: string | null;
+  host_timezone: string;
+  effective_timezone: string;
+  /** The effective zone's UTC offset now, e.g. "+10:00". */
+  effective_offset: string;
+  /** Every IANA name the server accepts. */
+  timezones: string[];
+}
+
 export const api = {
   start: () => request<StatusPayload>("POST", "/server/start"),
   stop: () => request<StatusPayload>("POST", "/server/stop"),
@@ -606,6 +619,12 @@ export const api = {
   cobbleCheck: () => request<CobbleVersion>("POST", "/cobble/check"),
   cobbleUpgrade: (version: string) =>
     request<CobbleVersion>("POST", "/cobble/upgrade", { version }),
+
+  cobbleSettings: () => request<CobbleSettings>("GET", "/cobble/settings"),
+  /** `null` clears the setting, returning to the host's zone. A name the server
+   *  does not recognise rejects with an `ApiCallError` carrying the reason. */
+  cobbleSettingsWrite: (timezone: string | null) =>
+    request<CobbleSettings>("PUT", "/cobble/settings", { timezone }),
 
   players: () => request<Roster>("GET", "/players"),
   playerSessions: (xuid: string) =>

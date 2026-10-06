@@ -24,7 +24,7 @@ well on any **Debian 12 or 13** VM or bare-metal install.
 
 ![Updates & Backups](docs/screenshots/updates.png)
 
-**cobble** — opened from the version beside the name in the header: cobble's own installed and latest versions, what's new in the latest release, and one-click upgrade.
+**cobble** — opened from the version beside the name, or the cog, in the header: cobble's timezone setting, its own installed and latest versions, what's new in the latest release, and one-click upgrade.
 
 ![cobble](docs/screenshots/cobble.png)
 
@@ -49,7 +49,7 @@ well on any **Debian 12 or 13** VM or bare-metal install.
 | Architecture | **amd64 (x86-64)** | BDS ships no ARM build; cobble refuses to install elsewhere. |
 | OS | **Debian 12 or 13** — Proxmox LXC (unprivileged is fine), VM, or bare metal | glibc ≥ 2.26 required by BDS; Debian 13 = 2.41. |
 | Memory | ~2 GB RAM | BDS plus a small world; more for larger worlds. |
-| Timezone | **Set explicitly** (`timedatectl set-timezone …`) | Scheduled backups and updates run in local time; an unset zone runs them at an unexpected hour. |
+| Timezone | Optional — pick one in the panel (cog → cobble page) | Scheduled backups and updates run in cobble's timezone, which defaults to the host's. Most containers are on UTC, so set the zone you want your schedules in; see [Timezone](#timezone). |
 | Networking | **TCP 19132** and **UDP 7551** reachable on the LAN, plus UDP from the ephemeral port range, or the range you pin in the **Network** section (see [Network transport](#network-transport)) | Bedrock 1.26.51.1+ uses the NetherNet transport: a TCP handshake on 19132, LAN discovery on UDP 7551, then a UDP connection per player. Bridged networking on a flat LAN needs no port forwarding. For players outside the LAN, the Network section lists what to forward. |
 | Backup location | `/backup` — optionally a bind mount from the Proxmox host, or any mounted disk | Cobble treats it as a plain path; NFS/CIFS mounting is up to you. |
 | Build tools | **None** | The release ships a pre-built wheel (frontend bundle included). The install script installs `python3`, `python3-venv`, `unzip` itself and every Python dependency as a pre-built wheel — no compiler. Only `curl` must be present beforehand, to fetch the script. |
@@ -179,7 +179,7 @@ Cobble runs with no config file present.
 | `COBBLE_CRASH_RESTART_THRESHOLD` | `3` | Crashes in the window after which auto-restart is abandoned. `0` disables it. |
 | `COBBLE_CRASH_RESTART_WINDOW` | `300` | Sliding window in seconds for the threshold. |
 | `COBBLE_PORT` | `80` | HTTP port. Ports below 1024 are privileged; the shipped unit grants `CAP_NET_BIND_SERVICE` so cobble binds 80 as an unprivileged user. |
-| `COBBLE_MAINTENANCE_TIME` | `04:00` | Local `HH:MM` **first-run seed** for the backup and update-check schedules (see below) — only consulted while no maintenance-settings overlay file exists yet. Empty string seeds both schedules as disabled; on-demand backup/update still work. |
+| `COBBLE_MAINTENANCE_TIME` | `04:00` | `HH:MM` (in [cobble's timezone](#timezone)) **first-run seed** for the backup and update-check schedules (see below) — only consulted while no maintenance-settings overlay file exists yet. Empty string seeds both schedules as disabled; on-demand backup/update still work. |
 | `COBBLE_BACKUP_ENABLED` | `true` | First-run seed for whether the backup schedule starts enabled. |
 | `COBBLE_UPDATE_ENABLED` | `true` | First-run seed for whether the update-check schedule starts enabled. |
 | `COBBLE_BACKUP_RETENTION` | `7` | First-run seed for how many backups to keep. Older ones are pruned oldest-first; the most recent usable backup is never pruned. |
@@ -189,10 +189,6 @@ Cobble runs with no config file present.
 | `COBBLE_RELEASE_CHECK_INTERVAL_HOURS` | `12` | Hours between release checks. |
 | `COBBLE_RELEASE_REPO` | `carlhako/cobble` | GitHub repository whose releases are checked. The upgrade helper uses the repository fixed at install time (`COBBLE_REPO` for the installer), not this setting. |
 | `COBBLE_UPGRADE_TIMEOUT_SECONDS` | `1500` | How long cobble waits for the upgrade helper before it gives up and restores the server. Keep it above the helper unit's 20-minute limit. |
-
-Set the server timezone explicitly (`timedatectl set-timezone …`) — scheduled
-maintenance runs in local wall-clock time. Each schedule's resolved next-run time
-is shown in the web interface so a misconfigured zone is visible.
 
 **Maintenance settings (backup retention, backup enablement, and the backup and
 update-check schedules) are live-editable from the Settings tab of the Updates &
@@ -207,6 +203,30 @@ update-check schedules are independently configurable (daily/weekly/monthly,
 with a day-of-week or day-of-month selector); when both happen to fall due
 together they still run as a single ordered sequence — backup first — so the
 server is stopped at most once.
+
+### Timezone
+
+Scheduled backups and update checks run at the time you set **in cobble's
+timezone**. Choose it in the web interface: the cog at the right of the header
+opens the cobble page, whose Settings card has a timezone picker, or a one-click
+"Use my browser's timezone". It takes effect straight away, with no restart
+(`GET`/`PUT /api/cobble/settings`).
+
+- **It defaults to the host's timezone.** Until you set one, schedules run in
+  whatever zone the host or container has, as before. Most LXC containers are on
+  UTC, so a 04:00 schedule runs at 04:00 UTC. When your browser's timezone and
+  cobble's would give different clock times at any point in the coming year, the
+  Updates & Backups screen and the Settings card say so and offer to switch.
+- The schedule time inputs and next-run times on Updates & Backups name the zone
+  they are in, and show times in that zone rather than your browser's.
+- **Daylight saving never skips or repeats a run.** A time that falls in a
+  spring-forward gap runs once, later by the length of the gap; a time that
+  occurs twice at fall-back runs once, at the first occurrence.
+- It is saved in `cobble_settings.json` under `COBBLE_STATE_DIR` and belongs to
+  the cobble instance, so **restoring a backup does not change it**.
+- The next-run times in `GET /api/status` (`next_scheduled_at`) carry a UTC
+  offset, for example `2026-10-07T04:00:00+10:00`. Earlier versions sent them
+  without one.
 
 ### Editing the Bedrock server configuration
 

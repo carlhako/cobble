@@ -1,4 +1,5 @@
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import { sections } from "../sections";
@@ -35,6 +36,30 @@ describe("app shell", () => {
     expect(
       screen.getByRole("heading", { name: "cobble (control panel)" }),
     ).toBeInTheDocument();
+  });
+
+  it("the header cog opens the cobble page and marks it current", async () => {
+    const { App } = await import("../App");
+    render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>,
+    );
+    const cog = screen.getByRole("link", { name: "cobble settings" });
+    // It is a header control, not a navigation-bar entry.
+    expect(
+      within(screen.getByRole("navigation")).queryByRole("link", {
+        name: "cobble settings",
+      }),
+    ).toBeNull();
+    expect(cog).not.toHaveClass("active");
+
+    await userEvent.click(cog);
+
+    expect(
+      screen.getByRole("heading", { name: "cobble (control panel)" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "cobble settings" })).toHaveClass("active");
   });
 
   it("adding a section to the list adds a route without touching App", () => {

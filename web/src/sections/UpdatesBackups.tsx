@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { useStatus } from "../api/StatusContext";
 import { RestartingPanel, useCobbleRestart } from "../api/useCobbleRestart";
+import { useCobbleSettings } from "../api/useCobbleSettings";
+import { formatInZone } from "../api/timezone";
+import { TimezoneMismatchNotice } from "../components/TimezoneMismatchNotice";
 import {
   ApiCallError,
   api,
@@ -139,6 +142,7 @@ function RollbackFailedAlert() {
 /** 10.2 + 10.4 — version state, a check action, and the skipped-version notice. */
 function VersionPanel({ busy }: { busy: boolean }) {
   const { status } = useStatus();
+  const zone = useCobbleSettings().settings?.effective_timezone;
   const v = status?.version_info;
   const u = status?.update;
   const [working, setWorking] = useState<null | "check" | "apply" | "clear">(null);
@@ -189,7 +193,7 @@ function VersionPanel({ busy }: { busy: boolean }) {
 
       <div className="muted">
         Last checked {fmtTime(u?.last_check_at ?? null)} · next scheduled{" "}
-        {fmtTime(u?.next_scheduled_at ?? null)}
+        {formatInZone(u?.next_scheduled_at ?? null, zone)}
       </div>
 
       {u?.skipping && (
@@ -373,11 +377,14 @@ function VersionHistoryTab() {
  *  update-check schedules. */
 function ScheduleEditor({
   label,
+  zone,
   value,
   onChange,
   disabled,
 }: {
   label: string;
+  /** The zone the time applies in: cobble's effective timezone. */
+  zone: string | undefined;
   value: ScheduleConfig;
   onChange: (next: ScheduleConfig) => void;
   disabled: boolean;
@@ -391,7 +398,7 @@ function ScheduleEditor({
     <fieldset className="schedule-editor" disabled={disabled}>
       <legend>{label}</legend>
       <label>
-        Time{" "}
+        Time{zone && ` (${zone})`}{" "}
         <input
           type="time"
           value={value.time}
@@ -444,6 +451,7 @@ function ScheduleEditor({
  *  editors, and the pre-update backup's fixed informational note (no control —
  *  maintenance-settings spec: "not exposed as a toggle"). */
 function SettingsTab() {
+  const zone = useCobbleSettings().settings?.effective_timezone;
   const [settings, setSettings] = useState<MaintenanceSettings | null>(null);
   const [draft, setDraft] = useState<MaintenanceSettings | null>(null);
   const [saving, setSaving] = useState(false);
@@ -527,6 +535,7 @@ function SettingsTab() {
 
       <ScheduleEditor
         label="Backup schedule"
+        zone={zone}
         value={draft.backup_schedule}
         disabled={!draft.backup_enabled}
         onChange={(backup_schedule) => setDraft({ ...draft, backup_schedule })}
@@ -546,6 +555,7 @@ function SettingsTab() {
       </label>
       <ScheduleEditor
         label="Update-check schedule"
+        zone={zone}
         value={draft.update_schedule}
         disabled={!draft.update_schedule.enabled}
         onChange={(update_schedule) => setDraft({ ...draft, update_schedule })}
@@ -611,6 +621,7 @@ function MaintenanceTabsPanel() {
 /** 10.6 + 10.8 — the backup list, a capture action, and a confirmed restore. */
 function BackupsPanel({ busy }: { busy: boolean }) {
   const { status } = useStatus();
+  const zone = useCobbleSettings().settings?.effective_timezone;
   const unhealthy = status?.backup?.unhealthy ?? null;
   const [items, setItems] = useState<BackupEntry[] | null>(null);
   const [working, setWorking] = useState(false);
@@ -691,6 +702,11 @@ function BackupsPanel({ busy }: { busy: boolean }) {
           <strong>Backups are failing.</strong> <span className="muted">{unhealthy}</span>
         </div>
       )}
+
+      <div className="muted">
+        Next scheduled backup{" "}
+        {formatInZone(status?.backup?.next_scheduled_at ?? null, zone)}
+      </div>
 
       <div className="controls-row">
         <button className="btn" disabled={busy || working} onClick={capture}>
@@ -814,6 +830,7 @@ export function UpdatesBackups() {
   return (
     <section className={`section updates-backups${stale ? " is-stale" : ""}`}>
       <h1>Updates &amp; Backups</h1>
+      <TimezoneMismatchNotice />
       <MaintenanceBanner />
       <RollbackFailedAlert />
       <FailedUpdateAlert />

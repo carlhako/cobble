@@ -132,6 +132,24 @@ h2 {
   background: var(--accent-weak);
   color: var(--accent);
 }
+/* The cobble settings cog: right-aligned on the header's top row (web-ui-shell). */
+.settings-cog {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.4rem;
+  border-radius: 999px;
+  color: var(--text-dim);
+  line-height: 0;
+}
+.settings-cog:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.settings-cog.active {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
 .app-main {
   max-width: 960px;
   margin: 0 auto;
@@ -435,6 +453,20 @@ h2 {
   .app-header {
     flex-wrap: wrap;
     gap: 0.75rem;
+  }
+  /* The nav takes its own row below the brand and the cog. */
+  .settings-cog {
+    order: 1;
+  }
+  /* Too many links for a phone: the nav scrolls within its own row, not the page. */
+  .app-nav {
+    order: 2;
+    flex-basis: 100%;
+    min-width: 0;
+    overflow-x: auto;
+  }
+  .app-nav a {
+    white-space: nowrap;
   }
   .app-main {
     padding: 1rem;

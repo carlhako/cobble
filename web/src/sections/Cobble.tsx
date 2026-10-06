@@ -1,8 +1,11 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Markdown, { type Components } from "react-markdown";
 import { useStatus } from "../api/StatusContext";
 import { useCobbleVersion } from "../api/useCobbleVersion";
+import { TimezoneMismatchNotice } from "../components/TimezoneMismatchNotice";
 import { ApiCallError, api, type CobbleVersion } from "../api/client";
+import { browserTimeZone } from "../api/timezone";
+import { useCobbleSettings } from "../api/useCobbleSettings";
 
 function fmtTime(iso: string | null): string {
   if (!iso) return "—";
@@ -221,6 +224,105 @@ function CobbleCard({ info }: { info: CobbleVersion }) {
   );
 }
 
+/** cobble's own settings: the timezone its schedules run in (cobble-settings;
+ *  web-ui-shell: "Cobble settings are editable from the cobble page"). */
+function CobbleSettingsCard() {
+  const { settings, save } = useCobbleSettings();
+  // "" is the host default; anything else is an IANA name.
+  const [choice, setChoice] = useState("");
+  const [filter, setFilter] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const saved = settings?.timezone ?? "";
+
+  // Follow the saved value: on load, and after a save (here or elsewhere).
+  useEffect(() => {
+    setChoice(saved);
+  }, [saved]);
+
+  const names = useMemo(() => {
+    const all = settings?.timezones ?? [];
+    const q = filter.trim().toLowerCase();
+    const shown = q ? all.filter((n) => n.toLowerCase().includes(q)) : all;
+    // Keep the current choice selectable even when the filter hides it.
+    return choice && !shown.includes(choice) ? [choice, ...shown] : shown;
+  }, [settings, filter, choice]);
+
+  if (!settings) {
+    return (
+      <div className="panel cobble-settings">
+        <h2>Settings</h2>
+        <p className="muted">Loading…</p>
+      </div>
+    );
+  }
+
+  const browser = browserTimeZone();
+
+  const apply = async (timezone: string | null) => {
+    setSaving(true);
+    setErr(null);
+    try {
+      await save(timezone);
+    } catch (e) {
+      setErr(e instanceof ApiCallError ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="panel cobble-settings">
+      <h2>Settings</h2>
+      <TimezoneMismatchNotice />
+      <div className="muted">
+        Schedules run in{" "}
+        <strong>
+          {settings.effective_timezone} (UTC{settings.effective_offset})
+        </strong>
+        {settings.timezone === null && " — the host's timezone"}.
+      </div>
+      <div className="controls-row">
+        <label>
+          Filter timezones{" "}
+          <input
+            type="search"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="e.g. Brisbane"
+          />
+        </label>
+        <label>
+          Timezone{" "}
+          <select value={choice} onChange={(e) => setChoice(e.target.value)}>
+            <option value="">Host default ({settings.host_timezone})</option>
+            {names.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          className="btn"
+          disabled={saving || choice === saved}
+          onClick={() => void apply(choice === "" ? null : choice)}
+        >
+          {saving ? "Saving…" : "Save timezone"}
+        </button>
+      </div>
+      {browser !== settings.effective_timezone && (
+        <div className="controls-row">
+          <button className="btn" disabled={saving} onClick={() => void apply(browser)}>
+            Use my browser's timezone ({browser})
+          </button>
+        </div>
+      )}
+      {err && <div className="controls-error">{err}</div>}
+    </div>
+  );
+}
+
 /** The cobble page, opened from the header version badge; not in the nav bar. */
 export function Cobble() {
   const { stale } = useStatus();
@@ -232,6 +334,7 @@ export function Cobble() {
         The control panel itself, separate from the Bedrock server's version and updates
         on Updates &amp; Backups.
       </p>
+      <CobbleSettingsCard />
       {info ? (
         <>
           <CobbleCard info={info} />

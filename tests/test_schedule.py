@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 
 from cobble.backup.service import BackupService
+from cobble.cobble_settings.service import CobbleSettingsService
+from cobble.cobble_settings.store import CobbleSettingsStore
 from cobble.maintenance.schedule_config import ScheduleConfig
 from cobble.maintenance.service import MaintenanceSettingsService
 from cobble.maintenance.settings_store import MaintenanceSettingsStore
@@ -16,6 +18,16 @@ from cobble.settings import Settings
 from cobble.update.service import UpdateCheck
 
 pytestmark = pytest.mark.asyncio
+
+
+def _utc(*args: int) -> datetime:
+    return datetime(*args, tzinfo=UTC)
+
+
+def _zone_service(tmp_path, name: str = "UTC") -> CobbleSettingsService:
+    store = CobbleSettingsStore(tmp_path / "cobble_settings.json")
+    store.set_timezone(name)
+    return CobbleSettingsService(store)
 
 
 class _Clock:
@@ -93,13 +105,16 @@ def _msvc(
     return MaintenanceSettingsService(store, settings)
 
 
-def _scheduler(tmp_path, settings, backup, update, *, clock, msvc=None) -> Scheduler:
+def _scheduler(
+    tmp_path, settings, backup, update, *, clock, msvc=None, zone: str = "UTC"
+) -> Scheduler:
     return Scheduler(
         settings,
         backup,
         update,
         supervisor=SimpleNamespace(),  # unused unless a coordinated window runs
         maintenance_settings=msvc or _msvc(tmp_path, settings),
+        cobble_settings=_zone_service(tmp_path, zone),
         clock=clock,
     )
 
@@ -114,25 +129,25 @@ async def test_parse_hhmm() -> None:
 
 
 async def test_daily_next_run_is_todays_or_tomorrows_local_time(tmp_path) -> None:
-    clock = _Clock(datetime(2026, 6, 1, 3, 30))  # before 04:00
+    clock = _Clock(_utc(2026, 6, 1, 3, 30))  # before 04:00
     sch = _scheduler(
         tmp_path, _settings(tmp_path), _StubBackup(), _StubUpdate(_check()), clock=clock
     )
-    assert sch.backup_next_run() == datetime(2026, 6, 1, 4, 0)
-    assert sch.update_next_run() == datetime(2026, 6, 1, 4, 0)
+    assert sch.backup_next_run() == _utc(2026, 6, 1, 4, 0)
+    assert sch.update_next_run() == _utc(2026, 6, 1, 4, 0)
 
-    clock.now = datetime(2026, 6, 1, 4, 30)  # after 04:00
-    assert sch.backup_next_run() == datetime(2026, 6, 2, 4, 0)
+    clock.now = _utc(2026, 6, 1, 4, 30)  # after 04:00
+    assert sch.backup_next_run() == _utc(2026, 6, 2, 4, 0)
 
 
 async def test_next_run_tracks_wall_clock_across_a_dst_jump(tmp_path) -> None:
-    clock = _Clock(datetime(2026, 3, 7, 23, 0))
+    clock = _Clock(_utc(2026, 3, 7, 23, 0))
     sch = _scheduler(
         tmp_path, _settings(tmp_path), _StubBackup(), _StubUpdate(_check()), clock=clock
     )
-    assert sch.backup_next_run() == datetime(2026, 3, 8, 4, 0)
-    clock.now = datetime(2026, 3, 8, 3, 15)
-    assert sch.backup_next_run() == datetime(2026, 3, 8, 4, 0)
+    assert sch.backup_next_run() == _utc(2026, 3, 8, 4, 0)
+    clock.now = _utc(2026, 3, 8, 3, 15)
+    assert sch.backup_next_run() == _utc(2026, 3, 8, 4, 0)
 
 
 async def test_disabled_schedule_reports_no_next_run(tmp_path) -> None:
@@ -142,7 +157,7 @@ async def test_disabled_schedule_reports_no_next_run(tmp_path) -> None:
         settings,
         _StubBackup(),
         _StubUpdate(_check()),
-        clock=_Clock(datetime(2026, 6, 1, 3, 0)),
+        clock=_Clock(_utc(2026, 6, 1, 3, 0)),
     )
     assert sch.backup_next_run() is None
     assert sch.update_next_run() is None
@@ -154,7 +169,7 @@ async def test_disabled_schedule_reports_no_next_run(tmp_path) -> None:
         settings2,
         _StubBackup(),
         _StubUpdate(_check()),
-        clock=_Clock(datetime(2026, 6, 1, 3, 0)),
+        clock=_Clock(_utc(2026, 6, 1, 3, 0)),
     )
     assert sch2.backup_next_run() is None
     assert sch2.update_next_run() is None
@@ -175,11 +190,11 @@ async def test_each_schedule_can_be_disabled_independently(tmp_path) -> None:
         settings,
         _StubBackup(),
         _StubUpdate(_check()),
-        clock=_Clock(datetime(2026, 6, 1, 3, 0)),
+        clock=_Clock(_utc(2026, 6, 1, 3, 0)),
         msvc=msvc,
     )
     assert sch.backup_next_run() is None
-    assert sch.update_next_run() == datetime(2026, 6, 1, 5, 0)
+    assert sch.update_next_run() == _utc(2026, 6, 1, 5, 0)
 
 
 # -- 2.1 weekly / monthly frequencies, clamping ----------------------
@@ -196,10 +211,10 @@ async def test_weekly_schedule_runs_on_the_chosen_weekday(tmp_path) -> None:
         settings,
         _StubBackup(),
         _StubUpdate(_check()),
-        clock=_Clock(datetime(2026, 6, 1, 0, 0)),
+        clock=_Clock(_utc(2026, 6, 1, 0, 0)),
         msvc=msvc,
     )
-    assert sch.backup_next_run() == datetime(2026, 6, 4, 4, 0)  # the following Thursday
+    assert sch.backup_next_run() == _utc(2026, 6, 4, 4, 0)  # the following Thursday
 
 
 async def test_weekly_schedule_recurs_after_it_passes(tmp_path) -> None:
@@ -214,10 +229,10 @@ async def test_weekly_schedule_recurs_after_it_passes(tmp_path) -> None:
         settings,
         _StubBackup(),
         _StubUpdate(_check()),
-        clock=_Clock(datetime(2026, 6, 4, 5, 0)),  # just past this week's run
+        clock=_Clock(_utc(2026, 6, 4, 5, 0)),  # just past this week's run
         msvc=msvc,
     )
-    assert sch.backup_next_run() == datetime(2026, 6, 11, 4, 0)
+    assert sch.backup_next_run() == _utc(2026, 6, 11, 4, 0)
 
 
 async def test_monthly_schedule_runs_on_the_chosen_day(tmp_path) -> None:
@@ -232,10 +247,10 @@ async def test_monthly_schedule_runs_on_the_chosen_day(tmp_path) -> None:
         settings,
         _StubBackup(),
         _StubUpdate(_check()),
-        clock=_Clock(datetime(2026, 6, 1, 0, 0)),
+        clock=_Clock(_utc(2026, 6, 1, 0, 0)),
         msvc=msvc,
     )
-    assert sch.backup_next_run() == datetime(2026, 6, 15, 4, 0)
+    assert sch.backup_next_run() == _utc(2026, 6, 15, 4, 0)
 
 
 async def test_monthly_schedule_day_31_clamps_in_a_30_day_month(tmp_path) -> None:
@@ -250,10 +265,10 @@ async def test_monthly_schedule_day_31_clamps_in_a_30_day_month(tmp_path) -> Non
         settings,
         _StubBackup(),
         _StubUpdate(_check()),
-        clock=_Clock(datetime(2026, 4, 1, 0, 0)),
+        clock=_Clock(_utc(2026, 4, 1, 0, 0)),
         msvc=msvc,
     )
-    assert sch.backup_next_run() == datetime(2026, 4, 30, 4, 0)  # April has 30 days
+    assert sch.backup_next_run() == _utc(2026, 4, 30, 4, 0)  # April has 30 days
 
 
 async def test_monthly_schedule_day_31_clamps_in_february(tmp_path) -> None:
@@ -268,10 +283,10 @@ async def test_monthly_schedule_day_31_clamps_in_february(tmp_path) -> None:
         settings,
         _StubBackup(),
         _StubUpdate(_check()),
-        clock=_Clock(datetime(2026, 2, 1, 0, 0)),
+        clock=_Clock(_utc(2026, 2, 1, 0, 0)),
         msvc=msvc,
     )
-    assert sch.backup_next_run() == datetime(2026, 2, 28, 4, 0)  # 2026 is not a leap year
+    assert sch.backup_next_run() == _utc(2026, 2, 28, 4, 0)  # 2026 is not a leap year
 
 
 async def test_monthly_schedule_day_29_clamps_in_february_of_a_leap_year(tmp_path) -> None:
@@ -286,10 +301,10 @@ async def test_monthly_schedule_day_29_clamps_in_february_of_a_leap_year(tmp_pat
         settings,
         _StubBackup(),
         _StubUpdate(_check()),
-        clock=_Clock(datetime(2028, 2, 1, 0, 0)),
+        clock=_Clock(_utc(2028, 2, 1, 0, 0)),
         msvc=msvc,
     )
-    assert sch.backup_next_run() == datetime(2028, 2, 29, 4, 0)  # 2028 is a leap year
+    assert sch.backup_next_run() == _utc(2028, 2, 29, 4, 0)  # 2028 is a leap year
 
 
 async def test_monthly_schedule_recurs_next_month_after_it_passes(tmp_path) -> None:
@@ -304,10 +319,10 @@ async def test_monthly_schedule_recurs_next_month_after_it_passes(tmp_path) -> N
         settings,
         _StubBackup(),
         _StubUpdate(_check()),
-        clock=_Clock(datetime(2026, 6, 20, 0, 0)),
+        clock=_Clock(_utc(2026, 6, 20, 0, 0)),
         msvc=msvc,
     )
-    assert sch.backup_next_run() == datetime(2026, 7, 15, 4, 0)
+    assert sch.backup_next_run() == _utc(2026, 7, 15, 4, 0)
 
 
 # -- 2.1 independent per-schedule next-run --------------------------
@@ -324,12 +339,12 @@ async def test_backup_and_update_schedules_are_independent(tmp_path) -> None:
         settings,
         _StubBackup(),
         _StubUpdate(_check()),
-        clock=_Clock(datetime(2026, 6, 1, 0, 0)),
+        clock=_Clock(_utc(2026, 6, 1, 0, 0)),
         msvc=msvc,
     )
-    assert sch.backup_next_run() == datetime(2026, 6, 1, 4, 0)
-    assert sch.update_next_run() == datetime(2026, 6, 7, 4, 0)  # the next Sunday
-    assert sch.next_run() == datetime(2026, 6, 1, 4, 0)  # the earlier of the two
+    assert sch.backup_next_run() == _utc(2026, 6, 1, 4, 0)
+    assert sch.update_next_run() == _utc(2026, 6, 7, 4, 0)  # the next Sunday
+    assert sch.next_run() == _utc(2026, 6, 1, 4, 0)  # the earlier of the two
 
 
 # -- 2.2 / 2.3 window sequencing (non-coinciding via stubs) ---------
@@ -338,7 +353,7 @@ async def test_window_with_an_available_update_and_no_due_backup_runs_update_onl
 ) -> None:
     backup, update = _StubBackup(), _StubUpdate(_check(available="2.0.0.1"))
     sch = _scheduler(
-        tmp_path, _settings(tmp_path), backup, update, clock=_Clock(datetime(2026, 6, 1, 4, 1))
+        tmp_path, _settings(tmp_path), backup, update, clock=_Clock(_utc(2026, 6, 1, 4, 1))
     )
     await sch._run_window(reason="scheduled", want_backup=False, want_update=True)
     assert update.applied == ["scheduled"]
@@ -348,7 +363,7 @@ async def test_window_with_an_available_update_and_no_due_backup_runs_update_onl
 async def test_window_with_a_due_backup_and_no_due_update_runs_backup_only(tmp_path) -> None:
     backup, update = _StubBackup(), _StubUpdate(_check(up_to_date=True))
     sch = _scheduler(
-        tmp_path, _settings(tmp_path), backup, update, clock=_Clock(datetime(2026, 6, 1, 4, 1))
+        tmp_path, _settings(tmp_path), backup, update, clock=_Clock(_utc(2026, 6, 1, 4, 1))
     )
     await sch._run_window(reason="scheduled", want_backup=True, want_update=False)
     assert update.checks == 0
@@ -360,7 +375,7 @@ async def test_window_skips_the_update_for_a_quarantined_version_but_still_backs
 ) -> None:
     backup, update = _StubBackup(), _StubUpdate(_check(available="2.0.0.1", skipped=True))
     sch = _scheduler(
-        tmp_path, _settings(tmp_path), backup, update, clock=_Clock(datetime(2026, 6, 1, 4, 1))
+        tmp_path, _settings(tmp_path), backup, update, clock=_Clock(_utc(2026, 6, 1, 4, 1))
     )
     await sch._run_window(reason="scheduled", want_backup=True, want_update=True)
     assert update.applied == []
@@ -370,7 +385,7 @@ async def test_window_skips_the_update_for_a_quarantined_version_but_still_backs
 async def test_backup_only_schedule_never_checks_for_updates(tmp_path) -> None:
     backup, update = _StubBackup(), _StubUpdate(_check(available="2.0.0.1"))
     settings = _settings(tmp_path, update_enabled=False)
-    sch = _scheduler(tmp_path, settings, backup, update, clock=_Clock(datetime(2026, 6, 1, 4, 1)))
+    sch = _scheduler(tmp_path, settings, backup, update, clock=_Clock(_utc(2026, 6, 1, 4, 1)))
     await sch._run_window(reason="scheduled", want_backup=True, want_update=True)
     assert update.checks == 0
     assert backup.captured == ["scheduled"]
@@ -378,7 +393,7 @@ async def test_backup_only_schedule_never_checks_for_updates(tmp_path) -> None:
 
 # -- 2.1 a missed window is skipped, not caught up -----------
 async def test_missed_window_is_skipped_until_the_next_occurrence(tmp_path) -> None:
-    clock = _Clock(datetime(2026, 6, 1, 5, 0))
+    clock = _Clock(_utc(2026, 6, 1, 5, 0))
     sch = _scheduler(
         tmp_path,
         _settings(tmp_path),
@@ -386,8 +401,8 @@ async def test_missed_window_is_skipped_until_the_next_occurrence(tmp_path) -> N
         _StubUpdate(_check(up_to_date=True)),
         clock=clock,
     )
-    assert sch.backup_next_run() == datetime(2026, 6, 2, 4, 0)  # tomorrow, not "now"
-    assert sch._should_run(datetime(2026, 6, 1, 4, 0), clock()) is False
+    assert sch.backup_next_run() == _utc(2026, 6, 2, 4, 0)  # tomorrow, not "now"
+    assert sch._should_run(_utc(2026, 6, 1, 4, 0), clock()) is False
 
 
 async def test_should_run_only_within_the_jitter_grace_after_the_target(tmp_path) -> None:
@@ -396,13 +411,13 @@ async def test_should_run_only_within_the_jitter_grace_after_the_target(tmp_path
         _settings(tmp_path),
         _StubBackup(),
         _StubUpdate(_check(up_to_date=True)),
-        clock=_Clock(datetime(2026, 6, 1, 4, 0)),
+        clock=_Clock(_utc(2026, 6, 1, 4, 0)),
     )
-    target = datetime(2026, 6, 1, 4, 0)
-    assert sch._should_run(target, datetime(2026, 6, 1, 3, 59, 59)) is False  # not yet
-    assert sch._should_run(target, datetime(2026, 6, 1, 4, 0, 1)) is True  # on time
-    assert sch._should_run(target, datetime(2026, 6, 1, 4, 25)) is True  # small jitter
-    assert sch._should_run(target, datetime(2026, 6, 1, 4, 45)) is False  # woke too late
+    target = _utc(2026, 6, 1, 4, 0)
+    assert sch._should_run(target, _utc(2026, 6, 1, 3, 59, 59)) is False  # not yet
+    assert sch._should_run(target, _utc(2026, 6, 1, 4, 0, 1)) is True  # on time
+    assert sch._should_run(target, _utc(2026, 6, 1, 4, 25)) is True  # small jitter
+    assert sch._should_run(target, _utc(2026, 6, 1, 4, 45)) is False  # woke too late
 
 
 async def test_no_schedule_state_file_is_written(tmp_path) -> None:
@@ -412,7 +427,7 @@ async def test_no_schedule_state_file_is_written(tmp_path) -> None:
         s,
         _StubBackup(),
         _StubUpdate(_check(up_to_date=True)),
-        clock=_Clock(datetime(2026, 6, 1, 4, 1)),
+        clock=_Clock(_utc(2026, 6, 1, 4, 1)),
     )
     await sch.run_now()
     assert not (s.state_dir / "schedule.json").exists()
@@ -425,7 +440,7 @@ async def test_run_now_uses_the_same_sequence_regardless_of_time(tmp_path) -> No
     # path, which needs a real supervisor — covered separately below.
     backup, update = _StubBackup(), _StubUpdate(_check(available="2.0.0.1"))
     settings = _settings(tmp_path, backup_enabled=False)
-    sch = _scheduler(tmp_path, settings, backup, update, clock=_Clock(datetime(2026, 6, 1, 14, 0)))
+    sch = _scheduler(tmp_path, settings, backup, update, clock=_Clock(_utc(2026, 6, 1, 14, 0)))
     await sch.run_now()
     assert update.applied == ["manual"]
     assert backup.captured == []
@@ -440,7 +455,7 @@ async def test_reschedule_now_wakes_a_sleeping_loop(tmp_path) -> None:
         settings,
         _StubBackup(),
         _StubUpdate(_check(up_to_date=True)),
-        clock=_Clock(datetime(2026, 6, 1, 0, 0)),
+        clock=_Clock(_utc(2026, 6, 1, 0, 0)),
         msvc=msvc,
     )
     # Not started as a real loop here — just prove the event is set/cleared
@@ -466,7 +481,7 @@ async def test_maintenance_settings_write_reschedules_via_the_service_callback(t
         settings,
         _StubBackup(),
         _StubUpdate(_check(up_to_date=True)),
-        clock=_Clock(datetime(2026, 6, 1, 0, 0)),
+        clock=_Clock(_utc(2026, 6, 1, 0, 0)),
         msvc=msvc,
     )
     assert sch._wake.is_set() is False
@@ -551,7 +566,7 @@ async def test_non_coinciding_runs_behave_independently(tmp_path) -> None:
     # A backup-only window never touches the update service at all.
     backup, update = _StubBackup(), _StubUpdate(_check(available="2.0.0.1"))
     sch = _scheduler(
-        tmp_path, _settings(tmp_path), backup, update, clock=_Clock(datetime(2026, 6, 1, 4, 1))
+        tmp_path, _settings(tmp_path), backup, update, clock=_Clock(_utc(2026, 6, 1, 4, 1))
     )
     await sch._run_window(reason="scheduled", want_backup=True, want_update=False)
     assert backup.captured == ["scheduled"]
@@ -572,7 +587,7 @@ async def test_an_occurrence_that_falls_during_another_window_still_runs(tmp_pat
         backup_schedule=ScheduleConfig(enabled=True, time="03:00", frequency="daily"),
         update_schedule=ScheduleConfig(enabled=True, time="03:05", frequency="daily"),
     )
-    clock = _Clock(datetime(2026, 6, 1, 2, 59))
+    clock = _Clock(_utc(2026, 6, 1, 2, 59))
 
     class _SlowBackup(_StubBackup):
         async def capture(self, *, reason: str) -> None:
@@ -611,7 +626,7 @@ async def test_a_window_woken_too_late_is_still_skipped(tmp_path) -> None:
         backup_schedule=ScheduleConfig(enabled=True, time="03:00", frequency="daily"),
         update_schedule=ScheduleConfig(enabled=False, time="03:00", frequency="daily"),
     )
-    clock = _Clock(datetime(2026, 6, 1, 2, 59))
+    clock = _Clock(_utc(2026, 6, 1, 2, 59))
     backup, update = _StubBackup(), _StubUpdate(_check(up_to_date=True))
     sch = _scheduler(tmp_path, settings, backup, update, clock=clock, msvc=msvc)
 

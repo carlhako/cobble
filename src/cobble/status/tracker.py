@@ -18,6 +18,7 @@ import contextlib
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from cobble.acquisition.version import is_newer
 from cobble.events.model import (
@@ -205,6 +206,7 @@ class StatusTracker:
         update=None,
         backup=None,
         scheduler=None,
+        cobble_settings=None,
         config=None,
         gamerules=None,
         access=None,
@@ -215,6 +217,7 @@ class StatusTracker:
         self._update = update  # UpdateService or None
         self._backup = backup  # BackupService or None
         self._scheduler = scheduler  # Scheduler or None
+        self._cobble_settings = cobble_settings  # CobbleSettingsService or None
         self._config = config  # ConfigService or None
         self._gamerules = gamerules  # GameruleManager or None
         self._access = access  # AccessService or None
@@ -371,17 +374,25 @@ class StatusTracker:
             changes = []
         return ConfigView(pending=bool(changes), pending_count=len(changes))
 
+    def _next_scheduled_iso(self, nxt: datetime | None) -> str | None:
+        """A next-run instant in the effective cobble timezone, carrying the
+        UTC offset in force at that instant (maintenance-settings spec), so
+        every consumer resolves it to the same moment."""
+        if nxt is None:
+            return None
+        if self._cobble_settings is not None and nxt.tzinfo is not None:
+            nxt = nxt.astimezone(self._cobble_settings.effective_zone())
+        return nxt.isoformat()
+
     def _backup_next_scheduled(self) -> str | None:
         if self._scheduler is None:
             return None
-        nxt = self._scheduler.backup_next_run()
-        return nxt.isoformat() if nxt is not None else None
+        return self._next_scheduled_iso(self._scheduler.backup_next_run())
 
     def _update_next_scheduled(self) -> str | None:
         if self._scheduler is None:
             return None
-        nxt = self._scheduler.update_next_run()
-        return nxt.isoformat() if nxt is not None else None
+        return self._next_scheduled_iso(self._scheduler.update_next_run())
 
     def _version_view(self) -> VersionView | None:
         installed = self._sup.installed_version()

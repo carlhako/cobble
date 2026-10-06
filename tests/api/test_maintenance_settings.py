@@ -83,7 +83,9 @@ def test_write_updates_the_scheduler_without_a_restart(client: TestClient) -> No
     assert resp.status_code == 200
     after = runtime.scheduler.backup_next_run()
     assert after != before
-    assert after.hour == 23 and after.minute == 45
+    # The schedule's time of day is read in the cobble timezone, whatever the host's.
+    local = after.astimezone(runtime.cobble_settings.effective_zone())
+    assert local.hour == 23 and local.minute == 45
 
 
 # -- 5.3 invalid write is rejected and leaves prior settings intact ----

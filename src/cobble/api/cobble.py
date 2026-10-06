@@ -10,14 +10,21 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, HTTPException
+from pydantic import BaseModel
 
 from cobble.api._shared import auth_guard, conflict
+from cobble.cobble_settings.service import InvalidTimezone
 from cobble.selfupdate.upgrade import UpgradeError, manual_command
 from cobble.supervisor.supervisor import SupervisorError
 
 if TYPE_CHECKING:
     from cobble.runtime import Runtime
+
+
+class _CobbleSettingsBody(BaseModel):
+    # Required, but null clears the setting (back to the host's zone).
+    timezone: str | None
 
 
 def build_cobble_router(runtime: Runtime) -> APIRouter:
@@ -50,5 +57,19 @@ def build_cobble_router(runtime: Runtime) -> APIRouter:
         except SupervisorError as exc:
             raise conflict(getattr(exc, "code", "conflict"), str(exc)) from exc
         return version_view()
+
+    @router.get("/settings", summary="cobble's own settings: the timezone schedules run in")
+    async def get_settings() -> dict:
+        return runtime.cobble_settings.view()
+
+    @router.put("/settings", summary="Set (or clear, with null) the cobble timezone")
+    async def put_settings(body: _CobbleSettingsBody) -> dict:
+        try:
+            runtime.cobble_settings.set_timezone(body.timezone)
+        except InvalidTimezone as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        # Open panels show next-run times in the effective zone; refresh them.
+        runtime.status.notify()
+        return runtime.cobble_settings.view()
 
     return router

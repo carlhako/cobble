@@ -540,3 +540,58 @@ it("6.2 a completed restore shows cobble restarting", async () => {
     await screen.findByRole("status", { name: "cobble restarting" }),
   ).toHaveTextContent(/Cobble is restarting/);
 });
+
+describe("Updates & Backups schedule zones", () => {
+  const SETTINGS_ROUTES = {
+    "GET /api/backups": { backups: [], unhealthy: null },
+    "GET /api/backups/history": { history: [] },
+    "GET /api/maintenance/settings": {
+      backup_retention: 7,
+      backup_enabled: true,
+      backup_schedule: { enabled: true, time: "04:00", frequency: "daily", day: null },
+      update_schedule: { enabled: true, time: "04:00", frequency: "daily", day: null },
+      pre_update_backup_always_on: true,
+    },
+  };
+
+  function cobbleZone(zone: string, offset: string) {
+    return {
+      "GET /api/cobble/settings": {
+        timezone: zone,
+        host_timezone: "UTC",
+        effective_timezone: zone,
+        effective_offset: offset,
+        timezones: [zone],
+      },
+    };
+  }
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("shows next runs as clock times in the cobble zone, not the browser's", async () => {
+    vi.stubEnv("TZ", "Australia/Brisbane");
+    // The browser really is ten hours ahead of UTC here.
+    expect(new Date("2026-10-07T04:00:00+00:00").getHours()).toBe(14);
+    mockFetch({ ...SETTINGS_ROUTES, ...cobbleZone("UTC", "+00:00") });
+    renderApp(<UpdatesBackups />);
+    await waitFor(() => expect(FakeEventSource.byUrl("/api/status/stream")).toBeTruthy());
+    push({
+      ...BASE,
+      update: { ...BASE.update, next_scheduled_at: "2026-10-07T04:00:00+00:00" },
+      backup: { ...BASE.backup, next_scheduled_at: "2026-10-07T04:00:00+00:00" },
+    });
+    const update = await screen.findByText(/next scheduled/);
+    await waitFor(() => expect(update).toHaveTextContent(/\b0?4:00\b.*UTC/));
+    expect(update).not.toHaveTextContent(/\b14:00\b|\b2:00 PM\b/);
+    const backup = screen.getByText(/Next scheduled backup/);
+    expect(backup).toHaveTextContent(/\b0?4:00\b.*UTC/);
+  });
+
+  it("labels each schedule time input with the effective zone", async () => {
+    mockFetch({ ...SETTINGS_ROUTES, ...cobbleZone("Australia/Brisbane", "+10:00") });
+    renderApp(<UpdatesBackups />);
+    await userEvent.click(await screen.findByRole("tab", { name: "Settings" }));
+    const inputs = await screen.findAllByLabelText("Time (Australia/Brisbane)");
+    expect(inputs).toHaveLength(2);
+  });
+});

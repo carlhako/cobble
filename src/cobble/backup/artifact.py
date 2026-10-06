@@ -41,6 +41,7 @@ INSTANCE_LOCAL: tuple[str, ...] = (
     "layout_migration.json",
     "import-staging",
     "backup_history.json",
+    "cobble_settings.json",
     PENDING_STATE_DIR,
     PENDING_STATE_MARKER,
 )

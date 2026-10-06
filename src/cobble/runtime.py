@@ -35,6 +35,8 @@ from cobble.acquisition.preflight import run_preflight
 from cobble.acquisition.version_source import try_resolve_current_version
 from cobble.backup.pending import PendingRestore
 from cobble.backup.service import BackupService
+from cobble.cobble_settings.service import CobbleSettingsService
+from cobble.cobble_settings.store import CobbleSettingsStore
 from cobble.config.service import ConfigService
 from cobble.console.console import Console
 from cobble.events.bus import EventBus
@@ -85,6 +87,12 @@ class Runtime:
         self.maintenance_settings = MaintenanceSettingsService(
             MaintenanceSettingsStore(settings.state_dir / "maintenance_settings.json"), settings
         )
+        # cobble's own settings (the timezone schedules run in). Instance-local:
+        # a restore leaves the file alone. The scheduler registers itself as the
+        # on-change hook so a zone change reschedules without a restart.
+        self.cobble_settings = CobbleSettingsService(
+            CobbleSettingsStore(settings.state_dir / "cobble_settings.json")
+        )
         self.backup = BackupService(
             settings, self.layout, self.supervisor, maintenance_settings=self.maintenance_settings
         )
@@ -98,6 +106,7 @@ class Runtime:
             self.update,
             supervisor=self.supervisor,
             maintenance_settings=self.maintenance_settings,
+            cobble_settings=self.cobble_settings,
         )
         self.migration = LayoutMigration(settings, self.layout, self.supervisor, self.backup)
         self.console = Console(self.supervisor)
@@ -194,6 +203,7 @@ class Runtime:
             update=self.update,
             backup=self.backup,
             scheduler=self.scheduler,
+            cobble_settings=self.cobble_settings,
             config=self.config,
             gamerules=self.gamerules,
             access=self.access,

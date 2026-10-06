@@ -1,8 +1,9 @@
 """In-process maintenance scheduler (section 7, design.md D7/D10; reworked for
 independent backup/update schedules, design.md "Decisions" #1-#2).
 
-An asyncio task computes each schedule's own next run in local wall-clock time
-and sleeps until the earlier of the two, waking early if a settings write
+An asyncio task computes each schedule's own next run as a wall-clock time in
+the effective cobble timezone (cobble-settings spec), expressed as a UTC
+instant, and sleeps until the earlier of the two, waking early if a settings write
 calls :meth:`Scheduler.reschedule_now`. When both schedules are due together
 (within the jitter grace) they run as one ordered sequence — backup first,
 then the update check/apply — under a single maintenance scope, so the server
@@ -21,10 +22,12 @@ from __future__ import annotations
 import asyncio
 import calendar
 import contextlib
-from collections.abc import Callable
-from datetime import datetime, timedelta
+from collections.abc import Callable, Iterator
+from datetime import UTC, date, datetime, timedelta, tzinfo
 
 from cobble.backup.service import BackupService
+from cobble.cobble_settings.service import CobbleSettingsService
+from cobble.cobble_settings.store import CobbleSettingsStore
 from cobble.logging import get_logger
 from cobble.maintenance.schedule_config import ScheduleConfig, parse_hhmm
 from cobble.maintenance.service import MaintenanceSettingsService
@@ -55,47 +58,65 @@ def _clamp_day(year: int, month: int, day: int) -> int:
     return min(day, last)
 
 
-def _monthly_at(year: int, month: int, day: int, hh: int, mm: int) -> datetime:
-    return datetime(year, month, _clamp_day(year, month, day), hh, mm)
+def _daily_dates(start: date) -> Iterator[date]:
+    d = start
+    while True:
+        yield d
+        d += timedelta(days=1)
 
 
-def _next_after(cfg: ScheduleConfig, now: datetime) -> datetime | None:
-    """The next local wall-clock time ``cfg`` fires after ``now``, or ``None``
-    if ``cfg.time`` is unparseable (a defensively-tolerated corrupt overlay)."""
+def _weekly_dates(start: date, weekday: int) -> Iterator[date]:
+    d = start + timedelta(days=(weekday - start.weekday()) % 7)
+    while True:
+        yield d
+        d += timedelta(days=7)
+
+
+def _monthly_dates(start: date, day: int) -> Iterator[date]:
+    year, month = start.year, start.month
+    while True:
+        yield date(year, month, _clamp_day(year, month, day))
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+
+
+def _next_after(cfg: ScheduleConfig, after: datetime, zone: tzinfo) -> datetime | None:
+    """The next UTC instant ``cfg`` fires after ``after`` (an aware time), with
+    its day and time of day read in ``zone``; ``None`` if ``cfg.time`` is
+    unparseable (a defensively-tolerated corrupt overlay).
+
+    Each candidate is built fresh from a calendar date and ``HH:MM`` with
+    ``fold=0`` and compared as a UTC instant (design.md D3). A time inside a
+    spring-forward gap then resolves with the pre-transition offset, which
+    lands it once, later by the gap. A time that occurs twice at fall-back
+    resolves to its first occurrence, and that instant is not after a run
+    that has already happened, so it does not run again."""
     parsed = parse_hhmm(cfg.time)
     if parsed is None:
         log.warning("schedule has an invalid time %r; treating it as having no next run", cfg.time)
         return None
     hh, mm = parsed
 
+    after_utc = after.astimezone(UTC)
+    today = after_utc.astimezone(zone).date()
+
     if cfg.frequency == "daily":
-        candidate = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-        return candidate if candidate > now else candidate + timedelta(days=1)
+        dates = _daily_dates(today)
+    elif cfg.frequency == "weekly":
+        dates = _weekly_dates(today, cfg.day if cfg.day is not None else 0)  # 0=Monday
+    elif cfg.frequency == "monthly":
+        dates = _monthly_dates(today, cfg.day if cfg.day is not None else 1)
+    else:
+        log.warning(
+            "schedule has an unknown frequency %r; treating it as having no next run",
+            cfg.frequency,
+        )
+        return None
 
-    if cfg.frequency == "weekly":
-        day = cfg.day if cfg.day is not None else 0  # 0=Monday .. 6=Sunday
-        base = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-        days_ahead = (day - base.weekday()) % 7
-        candidate = base + timedelta(days=days_ahead)
-        if candidate <= now:
-            candidate += timedelta(days=7)
-        return candidate
-
-    if cfg.frequency == "monthly":
-        day = cfg.day if cfg.day is not None else 1
-        candidate = _monthly_at(now.year, now.month, day, hh, mm)
-        if candidate <= now:
-            y, m = now.year, now.month + 1
-            if m > 12:
-                m = 1
-                y += 1
-            candidate = _monthly_at(y, m, day, hh, mm)
-        return candidate
-
-    log.warning(
-        "schedule has an unknown frequency %r; treating it as having no next run", cfg.frequency
-    )
-    return None
+    for d in dates:
+        candidate = datetime(d.year, d.month, d.day, hh, mm, tzinfo=zone, fold=0).astimezone(UTC)
+        if candidate > after_utc:
+            return candidate
+    return None  # unreachable: the date generators are infinite
 
 
 class Scheduler:
@@ -107,7 +128,8 @@ class Scheduler:
         *,
         supervisor: Supervisor | None = None,
         maintenance_settings: MaintenanceSettingsService | None = None,
-        clock: Callable[[], datetime] = datetime.now,  # naive local time
+        cobble_settings: CobbleSettingsService | None = None,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),  # aware, always UTC
     ) -> None:
         self._settings = settings
         self._backup = backup
@@ -124,6 +146,12 @@ class Scheduler:
             MaintenanceSettingsStore(settings.state_dir / "maintenance_settings.json"), settings
         )
         self._maintenance_settings.set_on_change(self.reschedule_now)
+        # The zone every schedule's day and time of day is read in; resolved on
+        # each computation so a timezone change applies without a restart.
+        self._cobble_settings = cobble_settings or CobbleSettingsService(
+            CobbleSettingsStore(settings.state_dir / "cobble_settings.json")
+        )
+        self._cobble_settings.set_on_change(self.reschedule_now)
         self._clock = clock
         self._task: asyncio.Task[None] | None = None
         self._window_lock = asyncio.Lock()
@@ -133,25 +161,29 @@ class Scheduler:
 
     # -- schedule maths ---------------------------------------
     def backup_next_run(self) -> datetime | None:
-        """The next local wall-clock time a scheduled backup will run, or
-        ``None`` when the backup schedule is disabled."""
+        """The next UTC instant a scheduled backup will run, or ``None`` when
+        the backup schedule is disabled."""
         return self._backup_next_after(self._clock())
 
     def update_next_run(self) -> datetime | None:
-        """The next local wall-clock time a scheduled update check will run,
-        or ``None`` when the update schedule is disabled."""
+        """The next UTC instant a scheduled update check will run, or ``None``
+        when the update schedule is disabled."""
         return self._update_next_after(self._clock())
 
     def _backup_next_after(self, after: datetime) -> datetime | None:
         if not self._maintenance_settings.effective_backup_enabled():
             return None
-        return _next_after(self._maintenance_settings.effective_backup_schedule(), after)
+        return _next_after(
+            self._maintenance_settings.effective_backup_schedule(),
+            after,
+            self._cobble_settings.effective_zone(),
+        )
 
     def _update_next_after(self, after: datetime) -> datetime | None:
         cfg = self._maintenance_settings.effective_update_schedule()
         if not cfg.enabled:
             return None
-        return _next_after(cfg, after)
+        return _next_after(cfg, after, self._cobble_settings.effective_zone())
 
     def next_run(self) -> datetime | None:
         """The earlier of the two schedules' next runs, or ``None`` if both

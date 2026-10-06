@@ -237,6 +237,27 @@ async def test_live_state_is_untouched_until_the_staged_restore_is_applied(
     assert not (state / ".pending-state").exists()
 
 
+async def test_a_restore_keeps_the_destinations_cobble_timezone(make_supervisor) -> None:
+    sup: Supervisor = make_supervisor(shutdown_timeout=5.0)
+    layout = Layout.from_settings(sup._settings)
+    svc = _service(sup)
+    state = layout.state_dir
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "cobble_settings.json").write_text('{"timezone": "Europe/London"}')
+    (state / "maintenance_settings.json").write_text('{"v": "captured"}')
+    _seed_world(layout, b"v1", "level-name=W\n")
+    captured = await svc.capture(reason="manual")
+
+    (state / "cobble_settings.json").write_text('{"timezone": "Australia/Brisbane"}')
+    (state / "maintenance_settings.json").write_text('{"v": "live"}')
+
+    assert (await svc.restore(captured.archive)).ok is True
+    pending = apply_pending_state(state)
+    assert pending is not None and pending.error is None
+    assert (state / "cobble_settings.json").read_text() == '{"timezone": "Australia/Brisbane"}'
+    assert (state / "maintenance_settings.json").read_text() == '{"v": "captured"}'
+
+
 async def test_no_backup_or_restore_runs_while_a_restart_is_pending(make_supervisor) -> None:
     sup: Supervisor = make_supervisor(shutdown_timeout=5.0)
     layout = Layout.from_settings(sup._settings)
