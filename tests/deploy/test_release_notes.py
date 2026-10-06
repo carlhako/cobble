@@ -93,6 +93,7 @@ def test_every_published_version_in_the_repo_changelog_has_notes() -> None:
         "0.7.2",
         "0.7.3",
         "0.7.4",
+        "0.8.0",
     ):
         res = _run(version, REPO / "CHANGELOG.md")
         assert res.returncode == 0, res.stderr

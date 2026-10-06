@@ -1,3 +1,3 @@
 """Cobble — a supervised web control panel for a Minecraft Bedrock Dedicated Server."""
 
-__version__ = "0.7.4"
+__version__ = "0.8.0"

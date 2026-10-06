@@ -5,6 +5,43 @@ workflow publishes that section as the GitHub release notes, which cobble shows
 on its own page before you upgrade. A tag without a section here is not
 published, so add the entry with the version bump.
 
+## 0.8.0 - 2026-10-06
+
+### What's new
+
+- **Choose the timezone your schedules run in.** Backups and update checks run
+  at the time you set in cobble's timezone, which is the host's zone until you
+  pick one. Hosts and containers are often on UTC, so a 04:00 schedule could run
+  at an hour you didn't expect. Open the cog at the right of the header to reach
+  the cobble page, where the new Settings card has a timezone picker and a
+  one-click "Use my browser's timezone". A change applies straight away, with no
+  restart, and a restore never changes it. Schedule times and next-run times on
+  Updates & Backups now name their zone, and a notice appears when your
+  browser's zone and cobble's would give different clock times.
+- **Daylight saving never skips or repeats a run.** A time that falls in a
+  spring-forward gap runs once, later by the length of the gap. A time that
+  occurs twice at fall-back runs once, at the first occurrence.
+- **A Network section.** It shows the ports for the transport the server will
+  use and lists the ports to forward on your router for players outside your
+  network. You can switch the transport, set the bind address, and pin the
+  player UDP port range, with a warning when the range has fewer ports than
+  `max-players`.
+- **Map UDP ports and name the address players reach.** The player UDP ports
+  can be mapped to different external ports, and given an address or a dynamic
+  DNS hostname. The forwarding list shows each mapping as external to local.
+- **Settings that are missing from `server.properties` can be set.** The
+  Configuration section lists a setting cobble recognises even when the file
+  doesn't have it yet, marked as not set.
+
+### Fixes
+
+- **The next-run time was shown in the wrong zone.** The panel read an untimed
+  next-run value as your browser's time, so a schedule running at 04:00 on a UTC
+  host showed "4:00 AM". Next-run times now carry a UTC offset, such as
+  `2026-10-07T04:00:00+10:00`. This changes `next_scheduled_at` in
+  `GET /api/status` for anything that reads it directly, which earlier versions
+  sent without an offset.
+
 ## 0.7.4 - 2026-10-05
 
 ### What's new
